@@ -7,10 +7,10 @@ build-backend = "hatchling.build"
 [project]
 name         = "equilibrium"
 version      = "0.0.1"                   # bump manually for now
-description  = "Dynamic general-equilibrium solver in JAX"
+description  = "Dynamic general-equilibrium solver using JAX"
 readme       = "README.md"               # long description on PyPI
 requires-python = ">=3.10"
-license      = { text = "MIT" }
+license = { text = "GPL-3.0-only" }
 authors      = [
   { name = "Daniel Greenwald", email = "daniel.greenwald@stern.nyu.edu" }
 ]
@@ -26,7 +26,6 @@ dependencies = [
   "pydantic>=2",
   "pydantic-settings>=2",
   "platformdirs>=4",
-  "black",
   "matplotlib",
   "tabulate",
   "sympy",
