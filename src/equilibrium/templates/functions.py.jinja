@@ -1,0 +1,77 @@
+{# -----------------------------------------------------------------
+   functions.py.jinja
+   Render a list of Python functions given:
+     • funcs: list[dict] where each dict has
+         name       : str           # the name of the function
+         args       : list[str]     # list of arguments
+         body       : list[str]     # raw code lines
+         returns    : list[str]     # list of variables to return
+     • core_vars: list[str], list of variables used as initial inputs
+     • derived_vars: list[str], list of variables created as part of the computation
+     • return_mutate: bool, set to True to return a new State object with the return fields set
+     • return_array : bool, set to True to return an array
+     • jit: bool, if True, wrap functions in @jax.jit
+   ----------------------------------------------------------------- #}
+
+{% extends "base.py.jinja" %}
+
+{% block body %}
+
+from typing import NamedTuple
+
+class State(NamedTuple):
+{% for var in core_vars %}
+    {{ var }}: np.ndarray
+{% endfor %}
+{% for var in derived_vars %}
+    {{ var }}: np.ndarray
+{% endfor %}
+
+    def __getitem__(self, key):
+        return getattr(self, key)
+
+def _upd(st: State, **kw):
+    """Pure functional update: returns a new State with fields replaced."""
+    return st._replace(**kw)
+
+def array_to_state(x):
+    """Initialize State from array x"""
+    {#dtype = x.dtype#}
+    nan = np.nan * x[0]
+    return State(
+{% for var in core_vars %}
+        {{ var }}=x[{{ loop.index0 }}],
+{% endfor %}
+{% for var in derived_vars %}
+        {{ var }}=nan,
+{% endfor %}
+    )
+
+{% for fn in funcs %}
+{% if jit %}
+@jax.jit
+{% endif %}
+def {{ fn.name }}({{ fn.args|join(", ") }}):
+    {#print('Tracing {{ fn.name }}', flush=True)#}
+{% for line in fn.body %}
+    {{ line }}
+{% endfor %}
+    {#{% if fn.return_array is not none %}#}
+    {% if fn.return_mutate %}
+    return _upd(st,
+        {% for return in fn.returns %}
+        {{ return }}={{ return }},
+        {% endfor %}
+    )
+    {% elif fn.return_array %}
+    return np.array((
+        {% for return in fn.returns %}
+        {{ return }},
+        {% endfor %}
+        ))
+    {% else %}
+    return {{ fn.returns|join(',') }}
+    {% endif %}
+
+{% endfor %}
+{% endblock %}

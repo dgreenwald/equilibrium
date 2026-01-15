@@ -1,0 +1,143 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""Model specification - a simple RBC model.
+
+This example demonstrates:
+- Exogenous processes (TFP shock)
+- Intermediate equations (production, consumption)
+- State transitions (capital accumulation)
+- Optimality conditions (Euler equation)
+- Expectation equations (forward-looking)
+- Parameter calibration (discount factor)
+- Model finalization workflow
+
+CUSTOMIZATION GUIDE:
+1. Replace the production function with your model's equations
+2. Add your exogenous processes using mod.add_exog()
+3. Define your rules by category (see CLAUDE.md for rule categories)
+4. Update parameters.py with your parameter values
+5. Run and iterate!
+"""
+
+import numpy as np
+from equilibrium import Model
+
+from parameters import get_params, get_steady_guess
+
+
+def create_model(
+    flags: dict | None = None,
+    params: dict | None = None,
+    steady_guess: dict | None = None,
+    label: str = "baseline",
+    **kwargs,
+) -> Model:
+    """Create the model.
+
+    Parameters
+    ----------
+    flags : dict, optional
+        Model feature flags (merged with defaults)
+    params : dict, optional
+        Parameter overrides
+    steady_guess : dict, optional
+        Initial guess overrides
+    label : str
+        Model label for plots and results
+    **kwargs
+        Additional arguments passed to Model()
+
+    Returns
+    -------
+    Model
+        Configured model ready for solution
+    """
+    # Default flags for model variants
+    # Add your feature flags here (e.g., "include_labor": True)
+    default_flags = {}
+    flags = {**default_flags, **(flags or {})}
+
+    # Create model instance
+    mod = Model(flags=flags, params=params, label=label, **kwargs)
+
+    # Load parameters and initial guesses
+    mod.params.update(get_params(mod.flags))
+    mod.steady_guess.update(get_steady_guess(mod.flags, mod.params))
+
+    ######################################################################
+    # EXOGENOUS PROCESSES
+    ######################################################################
+
+    # TFP shock: AR(1) process in logs
+    # Parameters PERS_log_Z_til and VOL_log_Z_til are defined in parameters.py
+    # Modify: Add your exogenous processes here
+    mod.exog_list += ["log_Z_til"]
+
+    ######################################################################
+    # MODEL EQUATIONS
+    ######################################################################
+
+    # INTERMEDIATE: Within-period calculations
+    # These are computed in sequence each period
+    mod.rules["intermediate"] += [
+        ("K_new", "I + (1.0 - delta) * K"),  # Capital law of motion
+        ("Z", "Z_bar * np.exp(log_Z_til)"),  # Total productivity (multiplicative)
+        ("fk", "alp * Z * (K ** (alp - 1.0))"),  # Marginal product of capital
+        ("y", "Z * (K ** alp)"),  # Output
+        ("c", "y - I"),  # Consumption
+        ("uc", "c ** (-gam)"),  # Marginal utility
+        ("K", "np.exp(log_K)"),  # Capital level
+    ]
+
+    # EXPECTATIONS: Forward-looking equations
+    # Use _NEXT suffix for next period variables
+    mod.rules["expectations"] += [
+        # Stochastic discount factor times return to capital
+        ("E_Om_K", "bet * (uc_NEXT / uc) * (fk_NEXT + (1.0 - delta))"),
+    ]
+
+    # TRANSITION: State evolution
+    # Format: ("state_var", "next_period_value")
+    mod.rules["transition"] += [
+        ("log_K", "np.log(K_new)"),  # Log capital transition
+    ]
+
+    # OPTIMALITY: First-order conditions
+    # These determine the unknowns (control variables)
+    mod.rules["optimality"] += [
+        ("I", "E_Om_K - 1.0"),  # Euler equation: E[MRS] = 1
+    ]
+
+    # CALIBRATION: Parameter calibration equations
+    # Calibrate discount factor to match steady-state capital target
+    mod.rules["calibration"] += [
+        ("bet", "K - 2.5"),  # Calibrate bet so that K = 2.5 in steady state
+    ]
+
+    ######################################################################
+    # ADVANCED: Model blocks, analytical steady states
+    ######################################################################
+
+    # BLOCKS: Reusable components (see equilibrium.blocks for standard blocks)
+    # Example:
+    # from equilibrium.blocks import preference_block
+    # mod.add_block(
+    #     preference_block(agent="household", atype="standard",
+    #                      housing=False, labor=False, util_type="crra"),
+    # )
+
+    # ANALYTICAL_STEADY: Closed-form steady state solutions
+    # Example:
+    # mod.rules["analytical_steady"] += [
+    #     ("K", "((1/bet - 1 + delta) / alp) ** (1/(alp-1))"),
+    # ]
+
+    ######################################################################
+    # FINALIZE
+    ######################################################################
+
+    # CRITICAL: Must call finalize() before solving
+    # This processes rules, resolves dependencies, generates code
+    mod.finalize()
+
+    return mod

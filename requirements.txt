@@ -1,0 +1,29 @@
+# Core dependencies for Equilibrium
+# These match the versions specified in pyproject.toml
+
+# JAX and numerical computing
+jax>=0.4
+jaxlib>=0.4
+numpy>=1.26
+scipy
+networkx
+
+# Code generation
+jinja2
+
+# Settings management
+pydantic
+pydantic-settings
+platformdirs
+
+# Code quality (usually installed separately, but included for convenience)
+black
+
+# Plotting
+matplotlib
+
+# Tabular display
+tabulate
+
+# Symbolic mathematics
+sympy

@@ -1,0 +1,46 @@
+# .github/workflows/ci.yml
+# ------------------------------------------------------------
+# Minimal CI for Danare: installs the package *editable*,
+# runs lint + type-check + tests on multiple Python versions.
+#
+name: CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: "pip"
+
+      - name: Upgrade build backend
+        run: python -m pip install --upgrade "hatchling>=1.24" build
+
+      - name: Install Danare + dev extras  (editable)
+        run: python -m pip install -e .[dev]
+
+      - name: Run Ruff (lint + import order)
+        run: ruff check --output-format=github .
+
+      #- name: Run MyPy (type-check)
+        #run: mypy danare --strict
+        # Remove --strict or ignore this step until your typing is ready.
+
+      # Turning off for now until I can figure out the py_tools dependency
+      - name: Run tests
+        run: pytest -q

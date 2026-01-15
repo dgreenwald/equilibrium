@@ -1,0 +1,24 @@
+name: equilibrium-env
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python>=3.10
+  - jax>=0.4
+  - jaxlib>=0.4
+  - numpy>=1.26
+  - scipy
+  - networkx
+  - jinja2
+  - pydantic
+  - pydantic-settings
+  - platformdirs
+  - black
+  - pytest
+  - ruff
+  - mypy
+  - matplotlib
+  - tabulate
+  - pip
+  - pip:
+    - -e .

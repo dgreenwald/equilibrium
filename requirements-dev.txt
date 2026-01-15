@@ -1,0 +1,17 @@
+# Development dependencies for Equilibrium
+# Install with: pip install -r requirements-dev.txt
+
+# Include base requirements
+-r requirements.txt
+
+# Testing
+pytest
+
+# Linting and formatting
+ruff
+black
+mypy
+pre-commit
+
+# Utilities
+tabulate

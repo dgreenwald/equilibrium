@@ -1,0 +1,84 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""Project constants and plotting configuration.
+
+CUSTOMIZATION:
+- Update plot_vars with your model's variable names
+- Add var_titles for cleaner axis labels
+- Use series_transforms for unit conversions (log → level, → percent, etc.)
+- Modify plot_spec to customize styling across all plots
+"""
+
+from equilibrium.plot import PlotSpec
+
+# Simulation horizon for IRFs
+Nt_irf = 20  # Number of periods to plot
+
+# Variables to include in plots
+# Replace with your model's variables
+plot_vars = [
+    "y",  # Output
+    "c",  # Consumption
+    "I",  # Investment
+    "K",  # Capital
+    "Z",  # TFP
+    "log_Z_til",  # Log TFP shock
+    "fk",  # Return to capital
+]
+
+# Variable display names for plots
+# If not specified, variable names are used directly
+var_titles = {
+    "y": "Output",
+    "c": "Consumption",
+    "I": "Investment",
+    "K": "Capital Stock",
+    "Z": "Productivity",
+    "log_Z_til": "Log TFP",
+    "fk": "Marginal Product of Capital",
+}
+
+# Series transformations for cleaner plots
+# Uncomment and customize as needed:
+# from equilibrium import SeriesTransform
+# series_transforms = {
+#     # Convert log differences to percentage changes
+#     "log_GDP": SeriesTransform(diff=True, log_to_level=True, to_percent=True),
+#
+#     # Convert to percentage changes
+#     "price_level": SeriesTransform(diff=True, to_percent=True),
+# }
+series_transforms = {}
+
+# ADVANCED: Styling for multi-model and multi-experiment comparisons
+# Format: label -> (display_name, color, line_style, marker)
+mod_labels_colors_styles_markers = {
+    "baseline": ("Baseline", "firebrick", "-", "o"),
+    "baseline_low_depreciation": ("Low Depreciation", "cornflowerblue", "-", "o"),
+    # Add more models/experiments here when comparing variants:
+    # "baseline_tfp_shock": ("TFP Shock", "orange", "--", "^"),
+    # "high_persistence": ("High ρ", "seagreen", "-.", "s"),
+}
+
+# Extract separate dictionaries for compatibility
+labels = {}
+colors = {}
+styles = {}
+markers = {}
+
+for key, (label, color, style, marker) in mod_labels_colors_styles_markers.items():
+    labels[key] = label
+    colors[key] = color
+    styles[key] = style
+    markers[key] = marker
+
+# Consolidated plot specification
+# This bundles all styling options for reuse across plotting functions
+plot_spec = PlotSpec(
+    var_titles=var_titles,
+    group_colors=colors,
+    group_styles=styles,
+    marker_styles=markers,
+    group_titles=labels,
+    series_transforms=series_transforms,
+)

@@ -1,0 +1,102 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""Main execution script.
+
+This script demonstrates the typical equilibrium workflow:
+1. Create model
+2. Solve steady state
+3. Compute impulse responses and plot
+4. Run deterministic experiments and plot
+
+CUSTOMIZATION:
+- Modify run_list to control which steps execute
+"""
+
+import constants as K
+from model import create_model
+
+# Control execution steps
+run_list = [
+    "steady",  # Solve steady state
+    "irfs",  # Compute impulse responses
+    "plot_irfs",  # Plot IRFs
+    "deterministic",  # Run deterministic transition experiment
+    "plot_deterministic",  # Plot deterministic results
+]
+
+# Create model
+print("\nCreating model...")
+mod = create_model(label="baseline")
+
+# Solve steady state
+if "steady" in run_list:
+    print("\nSolving steady state...")
+    mod.solve_steady(
+        calibrate=True,  # Calibrate parameters (e.g., bet to match K target)
+        save=True,  # Cache steady state
+        load_initial_guess=True,  # Load previous solution as guess
+    )
+    print("✓ Steady state solved!")
+
+# Compute impulse response functions
+if "irfs" in run_list:
+    print("\nComputing IRFs...")
+    mod.linearize()  # First-order approximation around steady state
+    mod.compute_linear_irfs(K.Nt_irf)
+    print("✓ IRFs computed!")
+
+# Plot IRFs
+if "plot_irfs" in run_list:
+    print("\nPlotting IRFs...")
+    from equilibrium.plot import plot_model_irfs
+
+    plot_model_irfs(
+        [mod],  # List of models (can compare multiple)
+        include_list=K.plot_vars,  # Variables to plot
+        plot_spec=K.plot_spec,  # Styling (colors, titles, transforms)
+        plot_type="pdf",  # Output format (pdf/png)
+        max_per_page=16,  # Layout
+        n_per_row=4,
+    )
+
+# Run deterministic regime-switching experiment
+if "deterministic" in run_list:
+    print("\nRunning deterministic experiment...")
+
+    from equilibrium.solvers import deterministic
+    from equilibrium.solvers.det_spec import DetSpec
+
+    # Configure experiment with a descriptive label
+    # Example: Experiment with regime change in depreciation rate
+    det_spec = DetSpec(label="low_depreciation")
+    det_spec.add_regime(0, preset_par_regime={"delta": 0.05})
+
+    # Example: Experiment with a TFP shock
+    # det_spec = DetSpec(label="tfp_shock")
+    # # Arguments: regime, shock_var, shock_per (persistence), shock_val (value)
+    # det_spec.add_shock(0, "log_Z_til", 0, 0.01)
+
+    # Solve transition path (nonlinear)
+    Nt = 100  # Number of periods
+    res = deterministic.solve_sequence(det_spec, mod, Nt)
+    print("✓ Deterministic transition solved!")
+
+# Plot deterministic results
+if "plot_deterministic" in run_list:
+    print("\nPlotting deterministic results...")
+    from equilibrium.plot import plot_deterministic_results
+
+    # Load and plot results by label (model_label, experiment_label)
+    # Results are automatically loaded from the saved cache
+    plot_deterministic_results(
+        result_labels=[("baseline", "low_depreciation")],  # Can compare multiple experiments
+        include_list=K.plot_vars,
+        plot_spec=K.plot_spec,  # Styling (colors, titles, transforms)
+        plot_type="pdf",
+        max_per_page=16,
+        n_per_row=4,
+    )
+
+print("\n" + "=" * 60)
+print("✓ Execution complete!")
+print("=" * 60)

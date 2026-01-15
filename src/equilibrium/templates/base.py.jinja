@@ -1,0 +1,16 @@
+{# ====================================================================
+   base.py.jinja  –  common header for generated Python modules
+   --------------------------------------------------------------------
+   Variables expected from child templates
+   ---------------------------------------
+   • jit      : bool       – if True, wrap functions in @jit
+   ==================================================================== #}
+
+{# ---- Imports (shared across all generated functions) --------------- #}
+import jax
+import jax.numpy as np
+
+{# ---- Body placeholder ---------------------------------------------- #}
+{% block body %}
+# Child template must implement the body block
+{% endblock %}

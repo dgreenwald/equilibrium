@@ -1,0 +1,89 @@
+# pyproject.toml  – place this in your repo root, next to README.md
+# ---------------------------------------------------------------
+[build-system]
+requires      = ["hatchling>=1.24"]      # tiny, fast backend
+build-backend = "hatchling.build"
+
+[project]
+name         = "equilibrium"
+version      = "0.0.1"                   # bump manually for now
+description  = "Dynamic general-equilibrium solver in JAX"
+readme       = "README.md"               # long description on PyPI
+requires-python = ">=3.10"
+license      = { text = "MIT" }
+authors      = [
+  { name = "Daniel Greenwald", email = "daniel.greenwald@stern.nyu.edu" }
+]
+
+# Runtime dependencies (Pin to *major* versions only; let tools resolve patch/minor)
+dependencies = [
+  "jax>=0.4",
+  "jaxlib>=0.4",
+  "numpy>=1.26",
+  "networkx",
+  "scipy",
+  "jinja2",
+  "pydantic>=2",
+  "pydantic-settings>=2",
+  "platformdirs>=4",
+  "black",
+  "matplotlib",
+  "tabulate",
+  "sympy",
+]
+
+[project.optional-dependencies]          # pip install equilibrium[dev]
+dev = [
+  "pytest",
+  "ruff",
+  "black",
+  "mypy",
+  "pre-commit",
+]
+
+[project.scripts]
+equilibrium = "equilibrium.cli:main"
+
+[tool.hatch]                             # (optional) project-wide Hatch config
+# Nothing here yet – you can add version-from-git or build hooks later.
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/equilibrium"]
+include = [
+  "src/equilibrium/templates/**/*.jinja",
+  "src/equilibrium/templates/**/*.template",
+]
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "src/equilibrium",
+  "README.md",
+  "LICENSE",
+  "pyproject.toml",
+  "requirements.txt",
+  "requirements-dev.txt",
+]
+
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+
+[tool.ruff.lint]
+# Enable common rules
+select = ["E", "F", "W", "I"]  # pycodestyle, pyflakes, import sorting
+# Ignore E501 (line too long) as Black handles line length
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+# Ignore E402 (module level import not at top) in test files
+# This is intentional for tests that need to set env vars before imports
+"tests/*.py" = ["E402"]
+# Ignore E402 in example files as they demonstrate legacy code patterns
+"examples/*.py" = ["E402"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
