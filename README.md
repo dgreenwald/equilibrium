@@ -60,6 +60,80 @@ Equilibrium requires Python 3.10+ and the following packages:
 - Pydantic (≥2) and pydantic-settings (≥2)
 - Matplotlib (for plotting)
 
+## Quick Start
+
+Here's a simple example showing how to define and solve a basic RBC (Real Business Cycle) model:
+
+```python
+import numpy as np
+from equilibrium import Model
+
+# Create a new model
+model = Model()
+
+# Set model parameters
+model.params.update({
+    'alp': 0.3,     # Capital share
+    'bet': 0.95,    # Discount factor
+    'delta': 0.1,   # Depreciation rate
+    'gam': 2.0,     # Risk aversion
+    'Z_bar': 1.0,   # Baseline productivity
+    'PERS_log_Z_til': 0.95,  # TFP shock persistence
+    'VOL_log_Z_til': 0.01,   # TFP shock volatility
+})
+
+# Set initial guesses for steady state
+model.steady_guess.update({
+    'I': 0.25,                   # Investment
+    'log_K': np.log(2.5),        # Log capital
+})
+
+# Define model equations through rules
+model.rules['intermediate'] += [
+    ('K_new', 'I + (1.0 - delta) * K'),                 # Capital law of motion
+    ('Z', 'Z_bar * np.exp(log_Z_til)'),                 # Total productivity
+    ('fk', 'alp * Z * (K ** (alp - 1.0))'),            # Marginal product of capital
+    ('y', 'Z * (K ** alp)'),                            # Output
+    ('c', 'y - I'),                                     # Consumption
+    ('uc', 'c ** (-gam)'),                              # Marginal utility
+    ('K', 'np.exp(log_K)'),                             # Capital level
+]
+
+# Expectation equations (Euler equation)
+model.rules['expectations'] += [
+    ('E_Om_K', 'bet * (uc_NEXT / uc) * (fk_NEXT + (1.0 - delta))'),
+]
+
+# State transition equations
+model.rules['transition'] += [
+    ('log_K', 'np.log(K_new)'),
+]
+
+# Optimality conditions
+model.rules['optimality'] += [
+    ('I', 'E_Om_K - 1.0'),
+]
+
+# Add exogenous process for productivity shock
+model.exog_list += ['log_Z_til']
+
+# Finalize the model (compiles rules into functions)
+model.finalize()
+
+# Solve for steady state
+model.solve_steady(calibrate=False)
+
+# Linearize around steady state
+model.linearize()
+
+# Compute impulse response functions
+model.compute_linear_irfs(Nt_irf=20)
+irfs = model.linear_mod.irf  # Access the computed IRFs
+
+# Simulate the model
+simulation = model.simulate_linear(Nt=100)
+```
+
 ## Creating a New Project
 
 The easiest way to start a new equilibrium project is with the scaffolding utility:
@@ -96,6 +170,27 @@ export EQUILIBRIUM_LOGGING__ENABLED=true
 export EQUILIBRIUM_LOGGING__LEVEL=INFO
 ```
 
+## Model Components
+
+### Rule Types
+
+Equilibrium organizes model equations into several rule categories:
+
+- **`intermediate`**: Definitions of intermediate variables and identities
+- **`expectations`**: Forward-looking equations (use `_NEXT` suffix for next period variables)
+- **`transition`**: State evolution equations
+- **`optimality`**: First-order conditions and equilibrium conditions
+- **`calibration`**: Equations used for parameter calibration
+
+### Variable Classifications
+
+The solver automatically classifies variables into:
+
+- **`u`**: Unknown/endogenous variables to be solved
+- **`x`**: State variables that evolve over time
+- **`z`**: Exogenous shock processes
+- **`params`**: Model parameters
+
 ## Modular Model Blocks
 
 Equilibrium is designed to be modular: you can assemble models from reusable
@@ -118,116 +213,6 @@ def production_block(mod: Model) -> ModelBlock:
 model = Model()
 model.add_block(production_block(model))
 ```
-
-## Quick Start
-
-Here's a simple example showing how to define and solve a basic RBC (Real Business Cycle) model:
-
-```python
-import numpy as np
-from equilibrium import Model
-
-# Create a new model
-model = Model()
-
-# Set model parameters
-model.params.update({
-    'alp': 0.6,     # Capital share
-    'bet': 0.95,    # Discount factor
-    'delta': 0.1,   # Depreciation rate
-    'gam': 2.0,     # Risk aversion
-    'Z_bar': 0.5,   # Baseline productivity
-})
-
-# Set initial guesses for steady state
-model.steady_guess.update({
-    'I': 0.5,                    # Investment
-    'log_K': np.log(6.0),        # Log capital
-})
-
-# Define model equations through rules
-model.rules['intermediate'] += [
-    ('K_new', 'I + (1.0 - delta) * K'),                 # Capital law of motion
-    ('Z', 'Z_bar + Z_til'),                             # Total productivity
-    ('fk', 'alp * Z * (K ** (alp - 1.0))'),            # Marginal product of capital
-    ('y', 'Z * (K ** alp)'),                            # Output
-    ('c', 'y - I'),                                     # Consumption
-    ('uc', 'c ** (-gam)'),                              # Marginal utility
-    ('K', 'np.exp(log_K)'),                             # Capital level
-]
-
-# Expectation equations (Euler equation)
-model.rules['expectations'] += [
-    ('E_Om_K', 'bet * (uc_NEXT / uc) * (fk_NEXT + (1.0 - delta))'),
-]
-
-# State transition equations
-model.rules['transition'] += [
-    ('log_K', 'np.log(K_new)'),
-]
-
-# Optimality conditions
-model.rules['optimality'] += [
-    ('I', 'E_Om_K - 1.0'),
-]
-
-# Add exogenous process for productivity shock
-model.add_exog('Z_til', pers=0.95, vol=0.1)
-
-# Finalize the model (compiles rules into functions)
-model.finalize()
-
-# Solve for steady state
-model.solve_steady(calibrate=False)
-
-# Linearize around steady state
-model.linearize()
-
-# Compute impulse response functions
-model.compute_linear_irfs(Nt_irf=20)
-irfs = model.linear_mod.irf  # Access the computed IRFs
-
-# Simulate the model
-simulation = model.simulate_linear(Nt=100)
-```
-
-## Model Components
-
-### Rule Types
-
-Equilibrium organizes model equations into several rule categories:
-
-- **`intermediate`**: Definitions of intermediate variables and identities
-- **`expectations`**: Forward-looking equations (use `_NEXT` suffix for next period variables)
-- **`transition`**: State evolution equations
-- **`optimality`**: First-order conditions and equilibrium conditions
-- **`calibration`**: Equations used for parameter calibration
-
-### Variable Classifications
-
-The solver automatically classifies variables into:
-
-- **`u`**: Unknown/endogenous variables to be solved
-- **`x`**: State variables that evolve over time
-- **`z`**: Exogenous shock processes
-- **`params`**: Model parameters
-
-## API Reference
-
-### Core Classes
-
-#### `Model`
-
-The main class for defining and solving DSGE models.
-
-**Key Methods:**
-
-- `finalize()`: Compiles model rules into executable functions
-- `solve_steady(calibrate=False)`: Solves for steady-state values
-- `linearize()`: Linearizes model around steady state
-- `simulate_linear(Nt, s_init=None, shocks=None)`: Simulates linearized model
-- `compute_linear_irfs(Nt_irf)`: Computes impulse response functions (stored in `model.linear_mod.irf`)
-- `add_exog(var_name, pers=0.0, vol=0.0)`: Adds exogenous AR(1) process
 
 ## Advanced Usage
 
@@ -317,6 +302,23 @@ steady_c = read_steady_value("c", label="my_model")
 # Read multiple values at once (returns a dict)
 steady_vals = read_steady_values(["c", "k", "y"], label="my_model")
 ```
+
+## API Reference
+
+### Core Classes
+
+#### `Model`
+
+The main class for defining and solving DSGE models.
+
+**Key Methods:**
+
+- `finalize()`: Compiles model rules into executable functions
+- `solve_steady(calibrate=False)`: Solves for steady-state values
+- `linearize()`: Linearizes model around steady state
+- `simulate_linear(Nt, s_init=None, shocks=None)`: Simulates linearized model
+- `compute_linear_irfs(Nt_irf)`: Computes impulse response functions (stored in `model.linear_mod.irf`)
+- `add_exog(var_name, pers=0.0, vol=0.0)`: Adds exogenous AR(1) process
 
 ## Performance Tips
 
