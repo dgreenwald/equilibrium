@@ -8,16 +8,14 @@ numpy>=1.26
 scipy
 networkx
 
-# Code generation
+# Code generation and formatting
 jinja2
+black
 
 # Settings management
 pydantic
 pydantic-settings
 platformdirs
-
-# Code quality (usually installed separately, but included for convenience)
-black
 
 # Plotting
 matplotlib

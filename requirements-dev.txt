@@ -9,7 +9,6 @@ pytest
 
 # Linting and formatting
 ruff
-black
 mypy
 pre-commit
 

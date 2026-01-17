@@ -23,6 +23,7 @@ dependencies = [
   "networkx",
   "scipy",
   "jinja2",
+  "black",
   "pydantic>=2",
   "pydantic-settings>=2",
   "platformdirs>=4",
@@ -35,7 +36,6 @@ dependencies = [
 dev = [
   "pytest",
   "ruff",
-  "black",
   "mypy",
   "pre-commit",
 ]
