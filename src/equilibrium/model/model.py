@@ -13,16 +13,15 @@ from pathlib import Path
 import jax
 import numpy as np
 from jax import numpy as jnp
-from scipy.optimize import root
+from scipy.optimize import root as scipy_root
 from tabulate import tabulate
 
 from ..core.codegen import CodeGenerator
 from ..core.rules import RuleProcessor
 from ..model.linear import LinearModel
 from ..settings import get_settings
+from ..solvers.newton import root as newton_root
 from ..utils import io
-
-# from ..solvers.newton import root
 from ..utils.containers import MyOrderedDict, PresetDict
 from ..utils.jax_function_bundle import FunctionBundle
 from ..utils.utilities import initialize_if_none
@@ -1085,6 +1084,72 @@ class Model:
 
         return st1
 
+    def _format_expression_with_values(self, rule_str, state_dict):
+        """
+        Format an expression with variable values substituted in brackets.
+
+        Parameters
+        ----------
+        rule_str : str
+            Expression to format.
+        state_dict : dict
+            Dictionary mapping variable names to their current values.
+
+        Returns
+        -------
+        str
+            Formatted expression with values, e.g., 'K [6.000] ** alp [0.360]'
+        """
+        import re
+
+        # Pattern to match variable names in the expression
+        # This matches the same pattern as RuleProcessor.p_word
+        var_pattern = re.compile(
+            r"\b(?!\w*\.\w*)(?!\w*_NEXT)(?!st|st_new)(?!np|jnp)(?<!\.)([a-zA-Z]\w*)(?!')(?!\s*\()\b"
+        )
+
+        def replace_with_value(match):
+            var = match.group(1)
+            # Get value from state_dict, or show 'N/A' if not available
+            value = state_dict.get(var, np.nan)
+            return f"{var} [{value:.6g}]"
+
+        return var_pattern.sub(replace_with_value, rule_str)
+
+    def format_equation_with_values(self, var_name, rule_str, state_dict):
+        """
+        Format an equation with variable values substituted in brackets.
+
+        Parameters
+        ----------
+        var_name : str
+            Name of the variable being defined (left-hand side).
+        rule_str : str
+            Expression defining the variable (right-hand side).
+        state_dict : dict
+            Dictionary mapping variable names to their current values.
+
+        Returns
+        -------
+        str
+            Formatted equation string with values, e.g.,
+            'y [2.150] = K [6.000] ** alp [0.360]'
+
+        Examples
+        --------
+        >>> model.format_equation_with_values('y', 'K ** alp',
+        ...     {'y': 2.15, 'K': 6.0, 'alp': 0.36})
+        'y [2.150] = K [6.000] ** alp [0.360]'
+        """
+        # Get the value of the left-hand side variable
+        lhs_value = state_dict.get(var_name, np.nan)
+        lhs_str = f"{var_name} [{lhs_value:.6g}]"
+
+        # Format the right-hand side
+        rhs_str = self._format_expression_with_values(rule_str, state_dict)
+
+        return f"{lhs_str} = {rhs_str}"
+
     def expectations(self, u, x, z, u_new, x_new, z_new, params):
 
         # u, x, z, u_new, x_new, z_new, params = standardize_args(u, x, z, u_new, x_new, z_new, params)
@@ -1203,8 +1268,16 @@ class Model:
         save: bool = False,
         load_initial_guess: bool = True,
         backup_to_use: int | None = None,
+        verbose_iterations: bool = False,
     ) -> bool:
-        """Internal helper that performs one steady-state solve attempt."""
+        """Internal helper that performs one steady-state solve attempt.
+
+        Parameters
+        ----------
+        verbose_iterations : bool, optional
+            If True, saves detailed iteration log with variable values and
+            equations to a file in the debug directory. Default is False.
+        """
 
         if init_dict is None:
             init_dict = self.init_dict
@@ -1238,10 +1311,199 @@ class Model:
                 )
                 self.objfcn_steady_jit = objfcn_steady_bundle.f_jit
 
+                # Set up callback for verbose iteration logging
+                callback = None
+                if verbose_iterations:
+                    from datetime import datetime
+                    from pathlib import Path
+
+                    settings = get_settings()
+                    debug_dir = Path(settings.paths.debug_dir)
+                    debug_dir.mkdir(parents=True, exist_ok=True)
+
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    log_filename = f"{self.label}_steady_iterations_{timestamp}.txt"
+                    log_path = debug_dir / log_filename
+
+                    print(f"Saving detailed iteration log to: {log_path}")
+
+                    # Open file and write header
+                    log_file = open(log_path, "w")
+                    log_file.write("=" * 70 + "\n")
+                    log_file.write(
+                        "Steady State Solve Attempt - Detailed Iteration Log\n"
+                    )
+                    log_file.write("=" * 70 + "\n")
+                    log_file.write(
+                        f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+                    )
+                    log_file.write(f"Model Label: {self.label}\n")
+                    log_file.write(f"Calibrate: {calibrate}\n")
+                    log_file.write("=" * 70 + "\n\n")
+
+                    def iteration_callback(iteration, ux, f_val, dist):
+                        """Callback to log detailed iteration information."""
+                        log_file.write(f"\nIteration {iteration}: |f| = {dist:.6e}\n")
+                        log_file.write("-" * 70 + "\n")
+
+                        # Split ux into u and x
+                        if self.N["u"] > 0 and self.N["x"] > 0:
+                            u, x = jnp.split(ux, [self.N["u"]])
+                        elif self.N["u"] > 0:
+                            u = ux
+                            x = jnp.array([], dtype=jnp.float64)
+                        else:  # self.N["x"] > 0
+                            u = jnp.array([], dtype=jnp.float64)
+                            x = ux
+
+                        # Get full state with intermediates
+                        state = self.array_to_state_plus_intermediates(
+                            u=u, x=x, z=init_vals["z"], params=init_vals["params"]
+                        )
+
+                        # Compute expectations (E variables) for steady state
+                        E = self.expectations(
+                            u,
+                            x,
+                            init_vals["z"],
+                            u,
+                            x,
+                            init_vals["z"],
+                            init_vals["params"],
+                        )
+
+                        # Add E variables to state
+                        state = self.inner_functions.read_expectations_variables(state)
+
+                        # Convert State NamedTuple to dict for easier access
+                        state_dict = state._asdict()
+
+                        # Add computed E array values to state_dict
+                        # E is an array, map it to expectation variable names
+                        if hasattr(self, "var_lists") and "E" in self.var_lists:
+                            for i, e_var_name in enumerate(self.var_lists["E"]):
+                                if i < len(E):
+                                    state_dict[e_var_name] = E[i]
+
+                        # Write equations for intermediate variables
+                        log_file.write("\n  Intermediate Variables:\n")
+                        for var_name, rule_str in self.rules["intermediate"].items():
+                            equation = self.format_equation_with_values(
+                                var_name, rule_str, state_dict
+                            )
+                            log_file.write(f"    {equation}\n")
+
+                        # Write equations for expectation variables
+                        if self.rules.get("expectations"):
+                            log_file.write("\n  Expectations:\n")
+                            for var_name, rule_str in self.rules[
+                                "expectations"
+                            ].items():
+                                # For steady state, drop _NEXT suffixes since next period = current period
+                                rule_str_steady = rule_str.replace("_NEXT", "")
+                                equation = self.format_equation_with_values(
+                                    var_name, rule_str_steady, state_dict
+                                )
+                                log_file.write(f"    {equation}\n")
+
+                        # Write equations for expectation variables read from state
+                        if self.rules.get("read_expectations"):
+                            log_file.write("\n  Expectation Variables (from state):\n")
+                            for var_name, rule_str in self.rules[
+                                "read_expectations"
+                            ].items():
+                                equation = self.format_equation_with_values(
+                                    var_name, rule_str, state_dict
+                                )
+                                log_file.write(f"    {equation}\n")
+
+                        # Write solved variables (u and x) with their values
+                        log_file.write("\n  State Variables (x):\n")
+                        for i, var_name in enumerate(self.var_lists["x"]):
+                            value = state_dict.get(var_name, np.nan)
+                            log_file.write(f"    {var_name}: {value:.6g}\n")
+
+                        log_file.write("\n  Control Variables (u):\n")
+                        for i, var_name in enumerate(self.var_lists["u"]):
+                            value = state_dict.get(var_name, np.nan)
+                            log_file.write(f"    {var_name}: {value:.6g}\n")
+
+                        # Write residuals with equilibrium conditions
+                        log_file.write("\n  Residuals:\n")
+
+                        # Compute x_new for transition residuals
+                        x_new = self.transition(
+                            u, x, z=init_vals["z"], params=init_vals["params"]
+                        )
+
+                        # First N["x"] residuals are transition errors: x_new - x = 0
+                        for i, var_name in enumerate(self.var_lists["x"]):
+                            if i < len(f_val):
+                                residual_val = f_val[i]
+                                x_val = state_dict.get(var_name, np.nan)
+                                x_new_val = x_new[i] if i < len(x_new) else np.nan
+
+                                # Format the equilibrium condition
+                                residual_eq = (
+                                    f"    {var_name} (transition) [{residual_val:.6e}] = "
+                                    f"{var_name}_new [{x_new_val:.6g}] - {var_name} [{x_val:.6g}]\n"
+                                )
+                                log_file.write(residual_eq)
+
+                        # Remaining residuals are optimality errors
+                        for i, var_name in enumerate(self.var_lists["u"]):
+                            idx = self.N["x"] + i
+                            if idx < len(f_val):
+                                residual_val = f_val[idx]
+
+                                # Get the optimality equation
+                                if var_name in self.rules.get("optimality", {}):
+                                    rule_str = self.rules["optimality"][var_name]
+                                    # Format the equation with values
+                                    rhs_formatted = self._format_expression_with_values(
+                                        rule_str, state_dict
+                                    )
+                                    residual_eq = (
+                                        f"    {var_name} (optimality) [{residual_val:.6e}] = "
+                                        f"{rhs_formatted}\n"
+                                    )
+                                else:
+                                    residual_eq = f"    {var_name} (optimality): {residual_val:.6e}\n"
+
+                                log_file.write(residual_eq)
+
+                        log_file.flush()
+
+                    callback = iteration_callback
+
                 # res = root(objfcn_jit, x0, args=args, jac=jac_objfcn_jit)
-                res = root(
-                    self.objfcn_steady_jit, x0, args=args, jac=self.jac_objfcn_steady
-                )
+                try:
+                    if verbose_iterations:
+                        # Use custom newton solver that supports callback
+                        res = newton_root(
+                            self.objfcn_steady_jit,
+                            x0,
+                            args=args,
+                            jac=self.jac_objfcn_steady,
+                            callback=callback,
+                        )
+                    else:
+                        # Use scipy's root solver for backward compatibility
+                        res = scipy_root(
+                            self.objfcn_steady_jit,
+                            x0,
+                            args=args,
+                            jac=self.jac_objfcn_steady,
+                        )
+                finally:
+                    # Close log file if it was opened
+                    if verbose_iterations and callback is not None:
+                        log_file.write("\n" + "=" * 70 + "\n")
+                        log_file.write("End of iteration log\n")
+                        log_file.write("=" * 70 + "\n")
+                        log_file.close()
+                        print(f"Iteration log saved to: {log_path}")
+
                 self.res_steady = res
 
                 if self.res_steady.success:
@@ -1341,6 +1603,7 @@ class Model:
                 save=save,
                 backup_to_use=backup_to_use,
                 display=False,  # Don't display in sub-model; parent will display
+                verbose_iterations=verbose_iterations,
             )
             # Guard against AttributeError when this_mod doesn't have steady_dict
             # (happens when solve fails before setting it)
@@ -1570,9 +1833,18 @@ class Model:
         *,
         max_backup_attempts: int | None = None,
         display: bool = True,
+        verbose_iterations: bool = False,
     ):
         """
         Solve for the steady state with retries using fallback initial guesses.
+
+        Parameters
+        ----------
+        verbose_iterations : bool, optional
+            If True, saves detailed iteration log with variable values and
+            equations to a file in the debug directory. Default is False.
+            The log includes intermediate variables with their defining equations,
+            all variable values, and residuals at each iteration.
         """
 
         def attempt(description: str, **kwargs) -> bool:
@@ -1584,6 +1856,7 @@ class Model:
                 save=save,
                 load_initial_guess=kwargs.get("load_initial_guess", load_initial_guess),
                 backup_to_use=kwargs.get("backup_to_use", backup_to_use),
+                verbose_iterations=verbose_iterations,
             )
             if success:
                 logger.info("Steady-state solve succeeded.")

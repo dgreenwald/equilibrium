@@ -94,6 +94,7 @@ def root(
     max_backstep_iterations=20,
     verbose=True,
     jac=None,
+    callback=None,
 ):
     """
     Find root of a function using Newton's method with backstepping.
@@ -122,6 +123,9 @@ def root(
         If True, print iteration progress. Default is True.
     jac : callable, optional
         Alternative name for grad parameter (for scipy compatibility).
+    callback : callable, optional
+        Function called after each iteration with signature:
+        callback(iteration, x, f_val, dist). Can be used for detailed logging.
 
     Returns
     -------
@@ -154,6 +158,10 @@ def root(
 
     if verbose:
         logger.info("Iteration %d: |f| = %g", iteration, dist)
+
+    # Call callback for initial iteration
+    if callback is not None:
+        callback(iteration, x, f_val, dist)
 
     while (dist > tol) and (iteration <= max_iterations):
 
@@ -193,6 +201,10 @@ def root(
 
         if verbose:
             logger.info("Iteration %d: |f| = %g", iteration, dist)
+
+        # Call callback after each iteration
+        if callback is not None:
+            callback(iteration, x, f_val, dist)
 
     if dist < tol:
         res["x"] = x
