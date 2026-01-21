@@ -1338,7 +1338,6 @@ class Model:
                         f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
                     )
                     log_file.write(f"Model Label: {self.label}\n")
-                    log_file.write(f"Calibrate: {calibrate}\n")
                     log_file.write("=" * 70 + "\n\n")
 
                     def iteration_callback(iteration, ux, f_val, dist):
