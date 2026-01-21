@@ -1269,6 +1269,7 @@ class Model:
         load_initial_guess: bool = True,
         backup_to_use: int | None = None,
         verbose_iterations: bool = False,
+        solver: str = "newton",
     ) -> bool:
         """Internal helper that performs one steady-state solve attempt.
 
@@ -1277,6 +1278,9 @@ class Model:
         verbose_iterations : bool, optional
             If True, saves detailed iteration log with variable values and
             equations to a file in the debug directory. Default is False.
+        solver : {"auto", "scipy", "newton"}, optional
+            Solver selection. "auto" uses "newton" when verbose_iterations is
+            enabled, otherwise "scipy". If "newton" fails, falls back to "scipy".
         """
 
         if init_dict is None:
@@ -1476,8 +1480,22 @@ class Model:
                     callback = iteration_callback
 
                 # res = root(objfcn_jit, x0, args=args, jac=jac_objfcn_jit)
+                solver_choice = solver
+                if solver_choice == "auto":
+                    solver_choice = "newton" if verbose_iterations else "scipy"
+
+                if solver_choice not in {"scipy", "newton"}:
+                    raise ValueError(
+                        "solver must be one of {'auto', 'scipy', 'newton'}"
+                    )
+
+                if verbose_iterations and solver_choice == "scipy":
+                    raise ValueError(
+                        "verbose_iterations requires solver='newton' for callbacks"
+                    )
+
                 try:
-                    if verbose_iterations:
+                    if solver_choice == "newton":
                         # Use custom newton solver that supports callback
                         res = newton_root(
                             self.objfcn_steady_jit,
@@ -1486,6 +1504,14 @@ class Model:
                             jac=self.jac_objfcn_steady,
                             callback=callback,
                         )
+                        if not res.success:
+                            # Fall back to scipy without verbose callback
+                            res = scipy_root(
+                                self.objfcn_steady_jit,
+                                x0,
+                                args=args,
+                                jac=self.jac_objfcn_steady,
+                            )
                     else:
                         # Use scipy's root solver for backward compatibility
                         res = scipy_root(
@@ -1833,6 +1859,7 @@ class Model:
         max_backup_attempts: int | None = None,
         display: bool = True,
         verbose_iterations: bool = False,
+        solver: str = "newton",
     ):
         """
         Solve for the steady state with retries using fallback initial guesses.
@@ -1844,6 +1871,9 @@ class Model:
             equations to a file in the debug directory. Default is False.
             The log includes intermediate variables with their defining equations,
             all variable values, and residuals at each iteration.
+        solver : {"auto", "scipy", "newton"}, optional
+            Solver selection. "auto" uses "newton" when verbose_iterations is
+            enabled, otherwise "scipy". If "newton" fails, falls back to "scipy".
         """
 
         def attempt(description: str, **kwargs) -> bool:
@@ -1856,6 +1886,7 @@ class Model:
                 load_initial_guess=kwargs.get("load_initial_guess", load_initial_guess),
                 backup_to_use=kwargs.get("backup_to_use", backup_to_use),
                 verbose_iterations=verbose_iterations,
+                solver=solver,
             )
             if success:
                 logger.info("Steady-state solve succeeded.")

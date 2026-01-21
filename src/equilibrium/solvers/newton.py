@@ -48,6 +48,8 @@ def gradient(f, x, args=None, kwargs=None, step=1e-5, two_sided=True, f_val=None
     if (not two_sided) and (f_val is None):
         f_val = f(x, *args, **kwargs)
 
+    # Work on a mutable copy to avoid in-place edits on JAX arrays
+    x = np.array(x).copy()
     grad = None
     for ii in range(len(x)):
 
@@ -69,15 +71,16 @@ def gradient(f, x, args=None, kwargs=None, step=1e-5, two_sided=True, f_val=None
             df_i = np.array(f_hi - f_val) / step
 
         if grad is None:
-
             if df_i.shape == ():
-                ncols = 1
+                nrows = 1
             else:
-                ncols = len(df_i)
+                nrows = len(df_i)
 
-            grad = np.zeros((len(x), ncols))
+            # Jacobian shape (n_outputs, n_inputs)
+            grad = np.zeros((nrows, len(x)))
 
-        grad[ii, :] = df_i
+        # Each column corresponds to derivative w.r.t. x[ii]
+        grad[:, ii] = df_i
 
     return grad
 
@@ -176,7 +179,7 @@ def root(
             grad_val = grad(x, *args, **kwargs)
 
         # Use Jacobian to compute step size
-        step = -np.linalg.solve(grad_val.T, f_val)
+        step = -np.linalg.solve(grad_val, f_val)
 
         # Move in step direction with backstepping line search
         backstep_iteration = 0
