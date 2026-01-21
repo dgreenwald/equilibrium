@@ -43,6 +43,36 @@ def _list_backups(backup_dir: Path, stem: str) -> list[Path]:
     return sorted(backup_dir.glob(f"{stem}_*.json"))
 
 
+def list_files_by_stem(
+    parent_dir: Path, stem: str, *, suffix: Optional[str] = None
+) -> list[Path]:
+    pattern = f"{stem}_*{suffix or ''}"
+    return sorted(parent_dir.glob(pattern))
+
+
+def prune_files_by_stem(
+    parent_dir: Path,
+    stem: str,
+    *,
+    keep: Optional[int],
+    suffix: Optional[str] = None,
+) -> None:
+    if keep is None or keep < 0:
+        return
+    if not parent_dir.exists():
+        return
+
+    files = list_files_by_stem(parent_dir, stem, suffix=suffix)
+    if len(files) <= keep:
+        return
+
+    for old in files[:-keep]:
+        try:
+            old.unlink()
+        except FileNotFoundError:
+            pass
+
+
 def save_json_with_backups(
     data: Any,
     main_path: Path,

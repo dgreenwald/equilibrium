@@ -41,6 +41,18 @@ class LoggingConfig(BaseModel):
     time_interval: int = 1
 
 
+class DebugConfig(BaseModel):
+    """
+    Configuration for debug outputs (e.g., iteration logs).
+
+    Attributes:
+        keep_iteration_logs: Max number of iteration log files to keep per model label.
+            Use None to disable pruning.
+    """
+
+    keep_iteration_logs: Optional[int] = 5
+
+
 def _default_data_dir() -> Path:
     return Path(user_data_dir(APP_NAME)).expanduser()
 
@@ -109,6 +121,9 @@ class Settings(BaseSettings):
 
     # Logging configuration
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
+
+    # Debug configuration
+    debug: DebugConfig = Field(default_factory=DebugConfig)
 
     # other toggles you might add later, kept minimal for now
     verbose: bool = False

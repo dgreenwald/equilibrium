@@ -10,6 +10,7 @@ import numpy as np
 
 from equilibrium import Model
 from equilibrium.settings import get_settings
+from equilibrium.utils import io
 
 jax.config.update("jax_enable_x64", True)
 
@@ -146,3 +147,41 @@ def test_verbose_iterations_disabled_by_default():
     assert (
         len(created_logs) == 0
     ), "Should not create log file when verbose_iterations=False"
+
+
+def test_verbose_iterations_prunes_old_logs(tmp_path, monkeypatch):
+    monkeypatch.setenv("EQUILIBRIUM_PATHS__DEBUG_DIR", str(tmp_path))
+    monkeypatch.setenv("EQUILIBRIUM_DEBUG__KEEP_ITERATION_LOGS", "1")
+    get_settings.cache_clear()
+    settings = get_settings()
+
+    mod = create_simple_model()
+    res1 = mod.solve_steady(calibrate=False, verbose_iterations=True, display=False)
+    assert res1.success
+
+    mod2 = create_simple_model()
+    res2 = mod2.solve_steady(calibrate=False, verbose_iterations=True, display=False)
+    assert res2.success
+
+    steady_label = mod.mod_steady.label if mod.mod_steady is not None else mod.label
+    logs = sorted(
+        settings.paths.debug_dir.glob(f"{steady_label}_steady_iterations_*.txt")
+    )
+    assert len(logs) == 1, "Should keep only the most recent iteration log"
+
+
+def test_prune_files_by_stem(tmp_path):
+    stem = "model_steady_iterations"
+    filenames = [
+        "model_steady_iterations_20250101_000000.txt",
+        "model_steady_iterations_20250102_000000.txt",
+        "model_steady_iterations_20250103_000000.txt",
+    ]
+    for name in filenames:
+        (tmp_path / name).write_text("test", encoding="utf-8")
+
+    io.prune_files_by_stem(tmp_path, stem, keep=2, suffix=".txt")
+
+    remaining = sorted(tmp_path.glob(f"{stem}_*.txt"))
+    assert len(remaining) == 2
+    assert remaining[-1].name.endswith("20250103_000000.txt")

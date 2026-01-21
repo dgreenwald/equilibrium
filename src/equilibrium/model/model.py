@@ -1317,9 +1317,12 @@ class Model:
 
                 # Set up callback for verbose iteration logging
                 callback = None
+                log_file = None
+                log_path = None
+                debug_dir = None
+
                 if verbose_iterations:
                     from datetime import datetime
-                    from pathlib import Path
 
                     settings = get_settings()
                     debug_dir = Path(settings.paths.debug_dir)
@@ -1528,6 +1531,13 @@ class Model:
                         log_file.write("=" * 70 + "\n")
                         log_file.close()
                         print(f"Iteration log saved to: {log_path}")
+                        if debug_dir is not None:
+                            io.prune_files_by_stem(
+                                debug_dir,
+                                f"{self.label}_steady_iterations",
+                                keep=settings.debug.keep_iteration_logs,
+                                suffix=".txt",
+                            )
 
                 self.res_steady = res
 
@@ -1871,13 +1881,20 @@ class Model:
             equations to a file in the debug directory. Default is False.
             The log includes intermediate variables with their defining equations,
             all variable values, and residuals at each iteration.
+            Only the first attempt produces a log; fallback attempts suppress logs.
         solver : {"auto", "scipy", "newton"}, optional
             Solver selection. "auto" uses "newton" when verbose_iterations is
             enabled, otherwise "scipy". If "newton" fails, falls back to "scipy".
         """
 
+        attempt_count = 0
+
         def attempt(description: str, **kwargs) -> bool:
-            logger.info("Attempting steady-state solve with %s...", description)
+            nonlocal attempt_count
+            if self.steady_flag:
+                logger.info("Attempting steady-state solve with %s...", description)
+            use_verbose = verbose_iterations and attempt_count == 0
+            attempt_count += 1
             success = self._solve_steady_attempt(
                 init_vals=init_vals,
                 init_dict=init_dict,
@@ -1885,13 +1902,14 @@ class Model:
                 save=save,
                 load_initial_guess=kwargs.get("load_initial_guess", load_initial_guess),
                 backup_to_use=kwargs.get("backup_to_use", backup_to_use),
-                verbose_iterations=verbose_iterations,
+                verbose_iterations=use_verbose,
                 solver=solver,
             )
-            if success:
-                logger.info("Steady-state solve succeeded.")
-            else:
-                logger.warning("Steady-state solve failed.")
+            if self.steady_flag:
+                if success:
+                    logger.info("Steady-state solve succeeded.")
+                else:
+                    logger.warning("Steady-state solve failed.")
             return success
 
         if attempt("load_initial_guess=True", load_initial_guess=True):
