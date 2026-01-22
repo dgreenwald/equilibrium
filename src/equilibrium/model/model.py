@@ -2798,3 +2798,297 @@ class Model:
         self.derived_vars = (
             self.var_lists["intermediate"] + self.var_lists["read_expectations"]
         )
+
+    def _format_var_list(self, var_list: list[str], indent: str = "  ") -> str:
+        """
+        Format a list of variables as comma-separated with line wrapping.
+
+        Parameters
+        ----------
+        var_list : list of str
+            Variable names to format
+        indent : str
+            Indentation for continuation lines
+
+        Returns
+        -------
+        str
+            Formatted string with commas and line breaks (without trailing semicolon)
+        """
+        if not var_list:
+            return ""
+
+        max_line_length = 80
+        lines = []
+        current_line = var_list[0]
+
+        for var in var_list[1:]:
+            # Check if adding the next variable would exceed line length
+            test_line = current_line + ", " + var
+            if len(test_line) <= max_line_length:
+                current_line = test_line
+            else:
+                # Start a new line
+                lines.append(current_line + ",")
+                current_line = indent + var
+
+        # Add the final line (no comma after last variable)
+        lines.append(current_line)
+
+        return "\n".join(lines)
+
+    def _add_timing_to_transition_rhs(self, expr: str) -> str:
+        """
+        Add (-1) timing notation to variables on RHS of transition equations.
+
+        Only adds timing to endogenous variables, not to parameters or function names.
+
+        Parameters
+        ----------
+        expr : str
+            Expression string (already with Dynare syntax)
+
+        Returns
+        -------
+        str
+            Expression with (-1) added to variable references
+        """
+        import re
+
+        # Build sets of variables and parameters
+        all_vars = set(
+            self.var_lists["u"]
+            + self.var_lists["x"]
+            + self.var_lists["intermediate"]
+            + self.var_lists["E"]
+            + self.exog_list
+        )
+        params = set(self.var_lists["params"])
+
+        # Common Dynare/mathematical functions that should not get timing
+        functions = {
+            "exp",
+            "log",
+            "sqrt",
+            "sin",
+            "cos",
+            "tan",
+            "abs",
+            "erf",
+            "max",
+            "min",
+        }
+
+        # Find all word tokens (potential variable names)
+        # Use word boundaries to match complete identifiers
+        def replace_variable(match):
+            var_name = match.group(1)
+
+            # Don't modify if it's a function, parameter, or already has timing
+            if var_name in functions:
+                return var_name
+            if var_name in params:
+                return var_name
+            # Check if already has timing notation (look ahead for parentheses)
+            if var_name in all_vars:
+                return var_name + "(-1)"
+            # Otherwise leave as-is (could be a number or unknown token)
+            return var_name
+
+        # Match word tokens: letters, numbers, underscores (but not starting with digit)
+        # Use negative lookahead to avoid matching if already followed by (
+        result = re.sub(r"\b([a-zA-Z_][a-zA-Z0-9_]*)\b(?!\()", replace_variable, expr)
+
+        return result
+
+    def _convert_to_dynare_syntax(self, expr: str, add_lags: bool = False) -> str:
+        """
+        Convert Python expression to Dynare syntax.
+
+        Transformations:
+        - Replace ** with ^
+        - Remove np. prefix from functions
+        - Replace _NEXT suffix with (+1)
+        - Optionally add (-1) timing to variables (for transition equations)
+
+        Parameters
+        ----------
+        expr : str
+            Python expression string
+        add_lags : bool
+            If True, add (-1) timing to variables (for transition equations)
+
+        Returns
+        -------
+        str
+            Dynare expression string
+        """
+        import re
+
+        # Step 1: Basic syntax transformations
+        result = expr.replace("**", "^")
+        result = result.replace("np.exp(", "exp(")
+        result = result.replace("np.log(", "log(")
+        result = result.replace("np.sqrt(", "sqrt(")
+
+        # Remove other np. prefixes (e.g., np.sin, np.cos, etc.)
+        result = re.sub(r"np\.(\w+)", r"\1", result)
+
+        # Replace _NEXT suffix with (+1) for forward-looking variables
+        result = re.sub(r"(\w+)_NEXT\b", r"\1(+1)", result)
+
+        # Step 2: Add lags if requested (for transition equations)
+        if add_lags:
+            result = self._add_timing_to_transition_rhs(result)
+
+        return result
+
+    def to_dynare(self, output_path: str | Path | None = None) -> str:
+        """
+        Export model to Dynare .mod file format.
+
+        Exports:
+        - parameters block (all model parameters)
+        - var block (endogenous variables: u, x, intermediate, E)
+        - varexo block (shock names with "e_" prefix)
+        - parameter value assignments
+        - model block with equations (AR(1) exog processes, intermediate,
+          transition, expectations, and optimality equations)
+
+        Parameters
+        ----------
+        output_path : str, Path, or None
+            Path to write the .mod file. If None, writes to debug directory
+            as <Model.label>.mod (e.g., "_default.mod").
+
+        Returns
+        -------
+        str
+            The generated Dynare .mod file content.
+
+        Raises
+        ------
+        RuntimeError
+            If the model has not been finalized.
+
+        Examples
+        --------
+        >>> model.finalize()
+        >>> # Write to default location (debug_dir/<label>.mod)
+        >>> dynare_code = model.to_dynare()
+        >>> # Write to specific location
+        >>> dynare_code = model.to_dynare(output_path="my_model.mod")
+        """
+        # Validation: ensure model is finalized
+        if self.var_lists is None:
+            raise RuntimeError(
+                "Model must be finalized before exporting to Dynare. "
+                "Call model.finalize() first."
+            )
+
+        # Collect variables
+        params = self.var_lists["params"]
+        endogenous = (
+            self.var_lists["u"]
+            + self.var_lists["x"]
+            + self.var_lists["intermediate"]
+            + self.var_lists["E"]
+        )
+        exogenous = self.var_lists["z"]
+
+        # Generate blocks
+        blocks = []
+
+        # Parameters block
+        if params:
+            param_str = self._format_var_list(params)
+            blocks.append(f"parameters {param_str};")
+
+        # Var block
+        if endogenous:
+            var_str = self._format_var_list(endogenous)
+            blocks.append(f"var {var_str};")
+
+        # Varexo block (with "e_" prefix)
+        if exogenous:
+            shock_names = [f"e_{var}" for var in exogenous]
+            varexo_str = self._format_var_list(shock_names)
+            blocks.append(f"varexo {varexo_str};")
+
+        # Parameter assignment block
+        if params:
+            param_assignments = ["// Parameters", ""]
+            for param in params:
+                value = self.params[param]
+                # Format with 16 decimal places to match Dynare precision
+                param_assignments.append(f"{param} = {value:.16f};")
+            blocks.append("\n".join(param_assignments))
+
+        # Model block with equations
+        model_equations = ["// Equilibrium conditions", "", "model;", ""]
+
+        # 1. AR(1) exogenous processes
+        for z in self.exog_list:
+            pers = f"PERS_{z}"
+            vol = f"VOL_{z}"
+            eq = f"{z} = {pers} * {z}(-1) + {vol} * e_{z};"
+            model_equations.append(eq)
+
+        if self.exog_list:
+            model_equations.append("")  # Blank line after exog processes
+
+        # 2. Intermediate equations
+        for var, expr in self.rules["intermediate"].items():
+            expr_dynare = self._convert_to_dynare_syntax(expr, add_lags=False)
+            model_equations.append(f"{var} = {expr_dynare};")
+
+        if self.rules["intermediate"]:
+            model_equations.append("")
+
+        # 3. Transition equations (with lags)
+        for var, expr in self.rules["transition"].items():
+            expr_dynare = self._convert_to_dynare_syntax(expr, add_lags=True)
+            model_equations.append(f"{var} = {expr_dynare};")
+
+        if self.rules["transition"]:
+            model_equations.append("")
+
+        # 4. Expectation equations
+        for var, expr in self.rules["expectations"].items():
+            expr_dynare = self._convert_to_dynare_syntax(expr, add_lags=False)
+            model_equations.append(f"{var} = {expr_dynare};")
+
+        if self.rules["expectations"]:
+            model_equations.append("")
+
+        # 5. Optimality equations
+        for var, expr in self.rules["optimality"].items():
+            expr_dynare = self._convert_to_dynare_syntax(expr, add_lags=False)
+            model_equations.append(f"{var} = {expr_dynare};")
+
+        model_equations.append("")
+        model_equations.append("end;")
+
+        blocks.append("\n".join(model_equations))
+
+        # Combine blocks with blank lines
+        content = "\n\n".join(blocks)
+
+        # Add trailing newline
+        if content:
+            content += "\n"
+
+        # Determine output path
+        if output_path is None:
+            settings = get_settings()
+            output_path = settings.paths.debug_dir / f"{self.label}.mod"
+        else:
+            output_path = Path(output_path)
+
+        # Write to file
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(content)
+
+        logger.info(f"Dynare .mod file written to: {output_path}")
+
+        return content
