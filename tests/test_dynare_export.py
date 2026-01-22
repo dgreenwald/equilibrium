@@ -10,11 +10,12 @@ This module tests that the to_dynare method correctly generates:
 4. Expectations variables with _NEXT suffixes removed for steady state
 """
 
+import tempfile
+from pathlib import Path
+
 import jax
 import numpy as np
 import pytest
-import tempfile
-from pathlib import Path
 
 from equilibrium import Model
 

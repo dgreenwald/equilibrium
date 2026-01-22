@@ -2952,8 +2952,6 @@ class Model:
         list of str
             Lines for the initval block, or empty list if no initialization needed.
         """
-        import re
-
         initval_lines = ["// Initial values", "", "initval;", ""]
 
         # Check if steady state has been solved
