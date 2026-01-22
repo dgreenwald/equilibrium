@@ -2943,6 +2943,94 @@ class Model:
 
         return result
 
+    def _generate_initval_block(self) -> list[str]:
+        """
+        Generate the initval block for Dynare export.
+
+        Returns
+        -------
+        list of str
+            Lines for the initval block, or empty list if no initialization needed.
+        """
+        initval_lines = ["// Initial values", "", "initval;", ""]
+
+        # Check if steady state has been solved
+        steady_solved = (
+            hasattr(self, "steady_dict")
+            and self.steady_dict
+            and getattr(self, "res_steady", None) is not None
+            and getattr(self.res_steady, "success", False)
+        )
+
+        # 1. Set exogenous variables to zero
+        for z_var in self.exog_list:
+            initval_lines.append(f"{z_var} = 0;")
+
+        if self.exog_list:
+            initval_lines.append("")  # Blank line after exogenous
+
+        # 2. Set endogenous states (x) and policy controls (u)
+        endogenous_vars = self.var_lists["u"] + self.var_lists["x"]
+
+        if steady_solved:
+            # Use values from steady_dict
+            for var in endogenous_vars:
+                if self._steady_dict_has_key(var):
+                    value = float(self.steady_dict[var])
+                    initval_lines.append(f"{var} = {value:.16f};")
+                elif var in self.init_dict:
+                    value = float(self.init_dict[var])
+                    initval_lines.append(f"{var} = {value:.16f};")
+                else:
+                    initval_lines.append(f"{var} = 0;")
+        else:
+            # Use analytical_steady rules if available, otherwise steady_guess
+            analytical_steady = self.rules.get("analytical_steady", {})
+
+            for var in endogenous_vars:
+                if var in analytical_steady:
+                    # Evaluate analytical_steady rule in steady state context
+                    expr = analytical_steady[var]
+                    # Remove _NEXT suffixes for steady state
+                    expr_steady = expr.replace("_NEXT", "")
+                    # Convert to Dynare syntax
+                    expr_dynare = self._convert_to_dynare_syntax(
+                        expr_steady, add_lags=False
+                    )
+                    initval_lines.append(f"{var} = {expr_dynare};")
+                elif var in self.init_dict:
+                    value = float(self.init_dict[var])
+                    initval_lines.append(f"{var} = {value:.16f};")
+                else:
+                    initval_lines.append(f"{var} = 0;")
+
+        if endogenous_vars:
+            initval_lines.append("")  # Blank line after endogenous
+
+        # 3. Set intermediate variables using their rules
+        for var, expr in self.rules["intermediate"].items():
+            # Convert to Dynare syntax without lags
+            expr_dynare = self._convert_to_dynare_syntax(expr, add_lags=False)
+            initval_lines.append(f"{var} = {expr_dynare};")
+
+        if self.rules["intermediate"]:
+            initval_lines.append("")
+
+        # 4. Set expectations variables using their rules with _NEXT removed
+        for var, expr in self.rules["expectations"].items():
+            # Remove _NEXT suffixes to flatten timing to steady state
+            expr_steady = expr.replace("_NEXT", "")
+            # Convert to Dynare syntax
+            expr_dynare = self._convert_to_dynare_syntax(expr_steady, add_lags=False)
+            initval_lines.append(f"{var} = {expr_dynare};")
+
+        if self.rules["expectations"]:
+            initval_lines.append("")
+
+        initval_lines.append("end;")
+
+        return initval_lines
+
     def to_dynare(self, output_path: str | Path | None = None) -> str:
         """
         Export model to Dynare .mod file format.
@@ -2954,6 +3042,12 @@ class Model:
         - parameter value assignments
         - model block with equations (AR(1) exog processes, intermediate,
           transition, expectations, and optimality equations)
+        - initval block with initial values for variables:
+          * exogenous variables set to zero
+          * endogenous states/controls from steady_dict (if solved) or
+            analytical_steady/steady_guess (if unsolved)
+          * intermediate variables using their rules
+          * expectations variables with _NEXT suffixes removed for steady state
 
         Parameters
         ----------
@@ -3070,6 +3164,11 @@ class Model:
         model_equations.append("end;")
 
         blocks.append("\n".join(model_equations))
+
+        # Generate initval block
+        initval_lines = self._generate_initval_block()
+        if initval_lines:
+            blocks.append("\n".join(initval_lines))
 
         # Combine blocks with blank lines
         content = "\n\n".join(blocks)
