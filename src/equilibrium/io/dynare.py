@@ -16,14 +16,243 @@ from ..settings import get_settings
 
 if TYPE_CHECKING:
     from ..model import Model
+    from ..solvers.det_spec import DetSpec
 
 logger = logging.getLogger(__name__)
+
+
+def _identify_changing_parameters(det_spec: "DetSpec", model: "Model") -> list[str]:
+    """
+    Identify parameters that change across regimes in a DetSpec.
+
+    Parameters
+    ----------
+    det_spec : DetSpec
+        The deterministic scenario specification
+    model : Model
+        The model instance (for validation)
+
+    Returns
+    -------
+    list[str]
+        List of parameter names that change in any regime
+
+    Raises
+    ------
+    ValueError
+        If a changing parameter already has TV_<param> in model.exog_list
+    """
+    changing_params = set()
+
+    # Compare each regime against the baseline
+    for regime_idx, regime_params in enumerate(det_spec.preset_par_list):
+        for param, value in regime_params.items():
+            # Check if this parameter differs from baseline
+            baseline_value = det_spec.preset_par_init.get(param, None)
+            if baseline_value is None:
+                # Parameter is new in this regime (not in baseline)
+                changing_params.add(param)
+            elif value != baseline_value:
+                # Parameter value differs from baseline
+                changing_params.add(param)
+
+    # Validate that TV_<param> doesn't already exist
+    for param in changing_params:
+        tv_var_name = f"TV_{param}"
+        if tv_var_name in model.exog_list:
+            raise ValueError(
+                f"Parameter '{param}' changes in det_spec but {tv_var_name} already "
+                f"exists as an exogenous variable. Remove {tv_var_name} from the "
+                f"model or use a different parameter name in det_spec."
+            )
+
+    return sorted(changing_params)
+
+
+def _create_tv_parameter_infrastructure(
+    changing_params: list[str],
+) -> tuple[list[str], list[str], dict[str, float]]:
+    """
+    Create TV_ infrastructure for changing parameters.
+
+    For each changing parameter, creates:
+    - TV_<param>: endogenous variable (AR(1) process)
+    - e_TV_<param>: exogenous shock
+    - mu_TV_<param>, rho_TV_<param>, sig_TV_<param>: parameters
+
+    Parameters
+    ----------
+    changing_params : list[str]
+        List of parameters that change across regimes
+
+    Returns
+    -------
+    tv_vars : list[str]
+        TV_<param> endogenous variables to add
+    tv_shocks : list[str]
+        e_TV_<param> exogenous shocks to add
+    tv_params : dict[str, float]
+        Parameters to add (mu_TV_, rho_TV_, sig_TV_)
+    """
+    tv_vars = []
+    tv_shocks = []
+    tv_params = {}
+
+    for param in changing_params:
+        tv_var = f"TV_{param}"
+        tv_shock = f"e_TV_{param}"
+
+        tv_vars.append(tv_var)
+        tv_shocks.append(tv_shock)
+
+        # Add AR(1) parameters (all set to create a pure shock process)
+        tv_params[f"mu_TV_{param}"] = 0.0  # Mean
+        tv_params[f"rho_TV_{param}"] = 0.0  # Persistence (no autocorrelation)
+        tv_params[f"sig_TV_{param}"] = 1.0  # Scale (unit shock)
+
+    return tv_vars, tv_shocks, tv_params
+
+
+def _replace_params_in_equation(
+    equation: str,
+    changing_params: list[str],
+    all_params: set[str],
+) -> str:
+    """
+    Replace parameter references with (param + TV_param) in an equation.
+
+    Only replaces standalone parameter references (not in assignments).
+    Uses word boundary matching to avoid partial replacements.
+
+    Parameters
+    ----------
+    equation : str
+        The equation string to modify
+    changing_params : list[str]
+        List of parameters to replace
+    all_params : set[str]
+        Set of all parameter names (to avoid replacing variables)
+
+    Returns
+    -------
+    str
+        Modified equation string
+
+    Examples
+    --------
+    >>> _replace_params_in_equation("y = delta * K", ["delta"], {"delta"})
+    'y = (delta + TV_delta) * K'
+    >>> _replace_params_in_equation("delta = 0.1", ["delta"], {"delta"})
+    'delta = 0.1'  # Don't replace in assignment
+    """
+    result = equation
+
+    for param in changing_params:
+        # Match parameter as a word boundary, but not if followed by '='
+        # This pattern captures: param not followed by whitespace and '='
+        # We need to be careful not to replace in "param = value" lines
+
+        # First check if this is a parameter assignment line
+        # Pattern: optional whitespace, param name, optional whitespace, equals
+        assignment_pattern = rf"^\s*{re.escape(param)}\s*="
+        if re.match(assignment_pattern, result):
+            # This is an assignment to the parameter itself, don't modify
+            continue
+
+        # Replace all occurrences of the parameter with (param + TV_param)
+        # Use word boundaries to avoid partial matches
+        # Negative lookahead to avoid replacing in function names
+        pattern = rf"\b{re.escape(param)}\b"
+
+        def replacer(match):
+            # Get the matched parameter name
+            matched = match.group(0)
+            # Return the replacement
+            return f"({matched} + TV_{matched})"
+
+        result = re.sub(pattern, replacer, result)
+
+    return result
+
+
+def _generate_regime_blocks(
+    det_spec: "DetSpec",
+    changing_params: list[str],
+) -> list[str]:
+    """
+    Generate endval and shocks blocks for all regimes.
+
+    Parameters
+    ----------
+    det_spec : DetSpec
+        The deterministic scenario specification
+    changing_params : list[str]
+        List of parameters that change across regimes
+
+    Returns
+    -------
+    list[str]
+        List of Dynare code blocks (endval and shocks)
+    """
+    blocks = []
+
+    # Calculate learnt_in times for each regime
+    # Regime 0 starts at period 1
+    # Regime r > 0 starts at time_list[r-1] (the transition time from regime r-1 to r)
+    learnt_in_times = [1]  # First regime learned at t=1
+    for t in det_spec.time_list:
+        learnt_in_times.append(t)
+
+    # Generate blocks for each regime
+    for regime_idx in range(det_spec.n_regimes):
+        learnt_in = learnt_in_times[regime_idx]
+        regime_params = det_spec.preset_par_list[regime_idx]
+        regime_shocks = (
+            det_spec.shocks[regime_idx] if regime_idx < len(det_spec.shocks) else []
+        )
+
+        # Generate endval block for parameter changes (if any)
+        if changing_params:
+            endval_lines = [f"// Regime {regime_idx + 1}", ""]
+            endval_lines.append(f"endval(learnt_in={learnt_in});")
+
+            for param in changing_params:
+                # Calculate absolute deviation from baseline
+                baseline_value = det_spec.preset_par_init.get(param, 0.0)
+                regime_value = regime_params.get(param, baseline_value)
+                val_diff = regime_value - baseline_value
+
+                endval_lines.append(f"e_TV_{param} = {val_diff:.16f};")
+
+            endval_lines.append("end;")
+            blocks.append("\n".join(endval_lines))
+
+        # Generate shocks block for this regime (if any)
+        if regime_shocks:
+            for shock_var, shock_per, shock_val in regime_shocks:
+                shock_lines = [f"// Regime {regime_idx + 1} shock to {shock_var}", ""]
+                shock_lines.append(f"shocks(learnt_in={learnt_in});")
+                shock_lines.append(f"    var e_{shock_var};")
+                # shock_per is relative to regime start
+                # Convert to absolute period by adding learnt_in
+                absolute_period = int(shock_per + learnt_in - 1)
+                shock_lines.append(f"    periods {absolute_period};")
+                shock_lines.append(f"    values {shock_val:.16f};")
+                shock_lines.append("end;")
+                blocks.append("\n".join(shock_lines))
+
+    return blocks
 
 
 def export_to_dynare(
     model: "Model",
     output_path: str | Path | None = None,
     steady: bool = False,
+    compute_irfs: bool = False,
+    irf_var_list: list[str] | None = None,
+    det_spec: "DetSpec | None" = None,
+    det_spec_periods: int = 1000,
+    det_spec_solver_kwargs: dict | None = None,
 ) -> str:
     """
     Export a finalized model to Dynare .mod file format.
@@ -36,6 +265,8 @@ def export_to_dynare(
     - Initial values block (from steady state or guesses)
     - Shocks block with unit standard errors
     - Optionally, a steady state solver command
+    - Optionally, a stoch_simul command for IRFs
+    - Optionally, perfect foresight regime blocks and solver commands (when det_spec provided)
 
     Parameters
     ----------
@@ -43,10 +274,28 @@ def export_to_dynare(
         A finalized Model instance to export. Must have called model.finalize().
     output_path : str, Path, or None, optional
         Path to write the .mod file. If None, writes to settings.paths.debug_dir
-        as <model.label>.mod (e.g., "_default.mod").
+        with filename pattern: <model.label>[_irfs][_<det_spec.label>].mod
+        Examples: "_default.mod", "_default_irfs.mod", "_default_boom.mod",
+        "_default_irfs_recession.mod"
     steady : bool, optional
         If True, add a "steady;" command after the initval block to compute
         the steady state in Dynare. Default is False.
+    compute_irfs : bool, optional
+        If True, add a "stoch_simul(order=1)" command after the shocks block.
+        Default is False.
+    irf_var_list : list[str] or None, optional
+        Variables to include in the stoch_simul command. If None, omit
+        variables so Dynare computes IRFs for all variables. Default is None.
+    det_spec : DetSpec or None, optional
+        Deterministic scenario specification for perfect foresight paths.
+        If provided, generates time-varying parameter infrastructure and
+        regime-specific endval/shocks blocks. Default is None.
+    det_spec_periods : int, optional
+        Horizon for perfect foresight simulation when det_spec is provided.
+        Default is 1000.
+    det_spec_solver_kwargs : dict or None, optional
+        Additional kwargs for Dynare's perfect_foresight_with_expectation_errors_solver
+        command (e.g., {"homotopy_initial_step_size": 0.5}). Default is None.
 
     Returns
     -------
@@ -57,6 +306,9 @@ def export_to_dynare(
     ------
     RuntimeError
         If the model has not been finalized (model.var_lists is None).
+    ValueError
+        If det_spec specifies changing a parameter that already has TV_<param>
+        as an exogenous variable in the model.
 
     Examples
     --------
@@ -67,6 +319,17 @@ def export_to_dynare(
     >>> dynare_code = export_to_dynare(model, output_path="my_model.mod")
     >>> # Include steady state computation command
     >>> dynare_code = export_to_dynare(model, steady=True)
+    >>> # Include IRFs for all variables
+    >>> dynare_code = export_to_dynare(model, compute_irfs=True)
+    >>> # Include IRFs for a subset of variables
+    >>> dynare_code = export_to_dynare(
+    ...     model, compute_irfs=True, irf_var_list=["y", "c"]
+    ... )
+    >>> # Include perfect foresight regime changes
+    >>> from equilibrium.solvers.det_spec import DetSpec
+    >>> spec = DetSpec(preset_par_init={"delta": 0.1})
+    >>> spec.add_regime(0, preset_par_regime={"delta": 0.15}, time_regime=10)
+    >>> dynare_code = export_to_dynare(model, det_spec=spec, det_spec_periods=100)
 
     Notes
     -----
@@ -77,6 +340,12 @@ def export_to_dynare(
 
     Exogenous shocks follow the convention e_<varname> with unit stderr.
     Actual shock scaling is handled via VOL_<var> parameters in AR(1) equations.
+
+    When det_spec is provided, time-varying parameters are implemented using:
+    - TV_<param>: endogenous AR(1) variable for each changing parameter
+    - e_TV_<param>: exogenous shock to drive parameter changes
+    - All references to <param> are replaced with (<param> + TV_<param>)
+    - endval(learnt_in=t) blocks set parameter deviations from baseline
     """
     # Validation
     if model.var_lists is None:
@@ -85,47 +354,83 @@ def export_to_dynare(
             "Call model.finalize() first."
         )
 
+    # DetSpec processing
+    changing_params = []
+    tv_infrastructure = {}
+    regime_blocks = []
+
+    if det_spec is not None:
+        # Identify parameters that change across regimes
+        changing_params = _identify_changing_parameters(det_spec, model)
+
+        # Create TV_ infrastructure if there are changing parameters
+        if changing_params:
+            tv_vars, tv_shocks, tv_params = _create_tv_parameter_infrastructure(
+                changing_params
+            )
+            tv_infrastructure = {
+                "vars": tv_vars,
+                "shocks": tv_shocks,
+                "params": tv_params,
+            }
+
+        # Generate regime-specific blocks
+        regime_blocks = _generate_regime_blocks(det_spec, changing_params)
+
     # Build the .mod file content
     blocks = []
 
-    # Parameters block
-    params = model.var_lists["params"]
+    # Parameters block (include TV_ params if det_spec provided)
+    params = list(model.var_lists["params"])
+    if tv_infrastructure:
+        params = params + list(tv_infrastructure["params"].keys())
     if params:
         param_str = format_var_list(params)
         blocks.append(f"parameters {param_str};")
 
-    # Var block (endogenous)
+    # Var block (endogenous, include TV_ vars if det_spec provided)
     endogenous = (
         model.var_lists["u"]
         + model.var_lists["x"]
         + model.var_lists["intermediate"]
         + model.var_lists["E"]
     )
+    if tv_infrastructure:
+        endogenous = endogenous + tv_infrastructure["vars"]
     if endogenous:
         var_str = format_var_list(endogenous)
         blocks.append(f"var {var_str};")
 
-    # Varexo block (with "e_" prefix)
+    # Varexo block (with "e_" prefix, include e_TV_ shocks if det_spec provided)
     exogenous = model.var_lists["z"]
-    if exogenous:
-        shock_names = [f"e_{var}" for var in exogenous]
+    shock_names = [f"e_{var}" for var in exogenous]
+    if tv_infrastructure:
+        shock_names = shock_names + tv_infrastructure["shocks"]
+    if shock_names:
         varexo_str = format_var_list(shock_names)
         blocks.append(f"varexo {varexo_str};")
 
     # Parameter assignments
     if params:
         param_assignments = ["// Parameters", ""]
-        for param in params:
+        # First add model parameters
+        for param in model.var_lists["params"]:
             value = model.params[param]
             param_assignments.append(f"{param} = {value:.16f};")
+        # Then add TV_ parameters if present
+        if tv_infrastructure:
+            param_assignments.append("")
+            param_assignments.append("// Time-varying parameter infrastructure")
+            for param, value in tv_infrastructure["params"].items():
+                param_assignments.append(f"{param} = {value:.16f};")
         blocks.append("\n".join(param_assignments))
 
-    # Model block
-    model_equations = _generate_model_block(model)
+    # Model block (with TV_ infrastructure if det_spec provided)
+    model_equations = _generate_model_block(model, changing_params, tv_infrastructure)
     blocks.append("\n".join(model_equations))
 
-    # Initval block
-    initval_lines = _generate_initval_block(model)
+    # Initval block (with TV_ vars if det_spec provided)
+    initval_lines = _generate_initval_block(model, tv_infrastructure)
     if initval_lines:
         blocks.append("\n".join(initval_lines))
 
@@ -138,6 +443,29 @@ def export_to_dynare(
     if steady:
         blocks.append("steady;")
 
+    # Stochastic simulation (IRFs)
+    if compute_irfs:
+        blocks.append(_generate_stoch_simul_block(irf_var_list))
+
+    # Perfect foresight regime blocks and commands (if det_spec provided)
+    if det_spec is not None:
+        # Add regime-specific endval and shocks blocks
+        blocks.extend(regime_blocks)
+
+        # Add perfect foresight setup command
+        blocks.append(
+            f"perfect_foresight_with_expectation_errors_setup(periods={det_spec_periods});"
+        )
+
+        # Add perfect foresight solver command
+        if det_spec_solver_kwargs:
+            kwargs_str = ",".join(f"{k}={v}" for k, v in det_spec_solver_kwargs.items())
+            blocks.append(
+                f"perfect_foresight_with_expectation_errors_solver({kwargs_str});"
+            )
+        else:
+            blocks.append("perfect_foresight_with_expectation_errors_solver;")
+
     # Combine with blank lines between blocks
     content = "\n\n".join(blocks)
     if content:
@@ -146,7 +474,12 @@ def export_to_dynare(
     # Determine output path
     if output_path is None:
         settings = get_settings()
-        output_path = settings.paths.debug_dir / f"{model.label}.mod"
+        suffix = ""
+        if compute_irfs:
+            suffix += "_irfs"
+        if det_spec is not None:
+            suffix += f"_{det_spec.label}"
+        output_path = settings.paths.debug_dir / f"{model.label}{suffix}.mod"
     else:
         output_path = Path(output_path)
 
@@ -211,7 +544,46 @@ def format_var_list(var_list: list[str], indent: str = "  ") -> str:
     return "\n".join(lines)
 
 
-def _generate_model_block(model: "Model") -> list[str]:
+def _format_space_separated_list(
+    var_list: list[str], indent: str = "  ", max_line_length: int = 80
+) -> str:
+    if not var_list:
+        return ""
+
+    lines = []
+    current_line = var_list[0]
+
+    for var in var_list[1:]:
+        test_line = current_line + " " + var
+        if len(test_line) <= max_line_length:
+            current_line = test_line
+        else:
+            lines.append(current_line)
+            current_line = indent + var
+
+    lines.append(current_line)
+    return "\n".join(lines)
+
+
+def _generate_stoch_simul_block(irf_var_list: list[str] | None) -> str:
+    if not irf_var_list:
+        return "stoch_simul(order=1);"
+
+    var_str = _format_space_separated_list(irf_var_list)
+    if "\n" in var_str:
+        lines = var_str.splitlines()
+        lines[0] = f"stoch_simul(order=1) {lines[0]}"
+        lines[-1] = f"{lines[-1]};"
+        return "\n".join(lines)
+
+    return f"stoch_simul(order=1) {var_str};"
+
+
+def _generate_model_block(
+    model: "Model",
+    changing_params: list[str] = None,
+    tv_infrastructure: dict = None,
+) -> list[str]:
     """
     Generate the model block with all equations.
 
@@ -219,12 +591,24 @@ def _generate_model_block(model: "Model") -> list[str]:
     ----------
     model : Model
         The model instance to export
+    changing_params : list[str], optional
+        List of parameters that change across regimes (for DetSpec)
+    tv_infrastructure : dict, optional
+        Dictionary with TV_ infrastructure (vars, shocks, params)
 
     Returns
     -------
     list of str
         Lines for the model block
     """
+    if changing_params is None:
+        changing_params = []
+    if tv_infrastructure is None:
+        tv_infrastructure = {}
+
+    # Get all parameter names for replacement logic
+    all_params = set(model.var_lists["params"])
+
     model_equations = ["// Equilibrium conditions", "", "model;", ""]
 
     # 1. AR(1) exogenous processes
@@ -237,33 +621,67 @@ def _generate_model_block(model: "Model") -> list[str]:
     if model.exog_list:
         model_equations.append("")
 
-    # 2. Intermediate equations
+    # 1b. TV_ AR(1) processes (if det_spec provided)
+    if tv_infrastructure.get("vars"):
+        model_equations.append("// Time-varying parameter processes")
+        for tv_var in tv_infrastructure["vars"]:
+            # Extract param name from TV_<param>
+            param_name = tv_var[3:]  # Remove "TV_" prefix
+            mu = f"mu_TV_{param_name}"
+            rho = f"rho_TV_{param_name}"
+            sig = f"sig_TV_{param_name}"
+            shock = f"e_TV_{param_name}"
+            eq = f"{tv_var} = (1.0 - {rho}) * {mu} + {rho} * {tv_var}(-1) + {sig} * {shock};"
+            model_equations.append(eq)
+        model_equations.append("")
+
+    # 2. Intermediate equations (with parameter replacement if needed)
     for var, expr in model.rules["intermediate"].items():
         expr_dynare = _convert_to_dynare_syntax(expr, add_lags=False)
+        # Replace parameters with (param + TV_param) if changing
+        if changing_params:
+            expr_dynare = _replace_params_in_equation(
+                expr_dynare, changing_params, all_params
+            )
         model_equations.append(f"{var} = {expr_dynare};")
 
     if model.rules["intermediate"]:
         model_equations.append("")
 
-    # 3. Transition equations (with lags)
+    # 3. Transition equations (with lags and parameter replacement if needed)
     for var, expr in model.rules["transition"].items():
         expr_dynare = _convert_to_dynare_syntax(expr, add_lags=True, model=model)
+        # Replace parameters with (param + TV_param) if changing
+        if changing_params:
+            expr_dynare = _replace_params_in_equation(
+                expr_dynare, changing_params, all_params
+            )
         model_equations.append(f"{var} = {expr_dynare};")
 
     if model.rules["transition"]:
         model_equations.append("")
 
-    # 4. Expectation equations
+    # 4. Expectation equations (with parameter replacement if needed)
     for var, expr in model.rules["expectations"].items():
         expr_dynare = _convert_to_dynare_syntax(expr, add_lags=False)
+        # Replace parameters with (param + TV_param) if changing
+        if changing_params:
+            expr_dynare = _replace_params_in_equation(
+                expr_dynare, changing_params, all_params
+            )
         model_equations.append(f"{var} = {expr_dynare};")
 
     if model.rules["expectations"]:
         model_equations.append("")
 
-    # 5. Optimality equations
+    # 5. Optimality equations (with parameter replacement if needed)
     for var, expr in model.rules["optimality"].items():
         expr_dynare = _convert_to_dynare_syntax(expr, add_lags=False)
+        # Replace parameters with (param + TV_param) if changing
+        if changing_params:
+            expr_dynare = _replace_params_in_equation(
+                expr_dynare, changing_params, all_params
+            )
         model_equations.append(f"{var} = {expr_dynare};")
 
     model_equations.append("")
@@ -272,7 +690,9 @@ def _generate_model_block(model: "Model") -> list[str]:
     return model_equations
 
 
-def _generate_initval_block(model: "Model") -> list[str]:
+def _generate_initval_block(
+    model: "Model", tv_infrastructure: dict = None
+) -> list[str]:
     """
     Generate the initval block for Dynare export.
 
@@ -280,12 +700,17 @@ def _generate_initval_block(model: "Model") -> list[str]:
     ----------
     model : Model
         The model instance to export
+    tv_infrastructure : dict, optional
+        Dictionary with TV_ infrastructure (vars, shocks, params)
 
     Returns
     -------
     list of str
         Lines for the initval block, or empty list if no initialization needed.
     """
+    if tv_infrastructure is None:
+        tv_infrastructure = {}
+
     initval_lines = ["// Initial values", "", "initval;", ""]
 
     # Check if steady state has been solved
@@ -357,6 +782,13 @@ def _generate_initval_block(model: "Model") -> list[str]:
         initval_lines.append(f"{var} = {expr_dynare};")
 
     if model.rules["expectations"]:
+        initval_lines.append("")
+
+    # 5. Set TV_ variables to zero (if det_spec provided)
+    if tv_infrastructure.get("vars"):
+        initval_lines.append("// Time-varying parameter variables")
+        for tv_var in tv_infrastructure["vars"]:
+            initval_lines.append(f"{tv_var} = 0;")
         initval_lines.append("")
 
     initval_lines.append("end;")

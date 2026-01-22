@@ -9,6 +9,7 @@ Created on Wed Oct 26 22:21:30 2022
 import itertools
 import logging
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import jax
 import numpy as np
@@ -25,6 +26,9 @@ from ..utils import io
 from ..utils.containers import MyOrderedDict, PresetDict
 from ..utils.jax_function_bundle import FunctionBundle
 from ..utils.utilities import initialize_if_none
+
+if TYPE_CHECKING:
+    from ..solvers.det_spec import DetSpec
 
 jax.config.update("jax_enable_x64", True)
 
@@ -2800,7 +2804,14 @@ class Model:
         )
 
     def to_dynare(
-        self, output_path: str | Path | None = None, steady: bool = False
+        self,
+        output_path: str | Path | None = None,
+        steady: bool = False,
+        compute_irfs: bool = False,
+        irf_var_list: list[str] | None = None,
+        det_spec: "DetSpec | None" = None,
+        det_spec_periods: int = 1000,
+        det_spec_solver_kwargs: dict | None = None,
     ) -> str:
         """
         Export model to Dynare .mod file format.
@@ -2812,10 +2823,28 @@ class Model:
         ----------
         output_path : str, Path, or None
             Path to write the .mod file. If None, writes to debug directory
-            as <Model.label>.mod (e.g., "_default.mod").
+            with filename pattern: <model.label>[_irfs][_<det_spec.label>].mod
+            Examples: "_default.mod", "_default_irfs.mod", "_default_boom.mod",
+            "_default_irfs_recession.mod"
         steady : bool, optional
             If True, add a "steady;" command after the initval block to compute
             the steady state in Dynare. Default is False.
+        compute_irfs : bool, optional
+            If True, add a "stoch_simul(order=1)" command after the shocks
+            block. Default is False.
+        irf_var_list : list[str] or None, optional
+            Variables to include in the stoch_simul command. If None, omit
+            variables so Dynare computes IRFs for all variables. Default is None.
+        det_spec : DetSpec or None, optional
+            Deterministic scenario specification for perfect foresight paths.
+            If provided, generates time-varying parameter infrastructure and
+            regime-specific endval/shocks blocks. Default is None.
+        det_spec_periods : int, optional
+            Horizon for perfect foresight simulation when det_spec is provided.
+            Default is 1000.
+        det_spec_solver_kwargs : dict or None, optional
+            Additional kwargs for Dynare's perfect_foresight_with_expectation_errors_solver
+            command (e.g., {"homotopy_initial_step_size": 0.5}). Default is None.
 
         Returns
         -------
@@ -2826,6 +2855,9 @@ class Model:
         ------
         RuntimeError
             If the model has not been finalized.
+        ValueError
+            If det_spec specifies changing a parameter that already has TV_<param>
+            as an exogenous variable in the model.
 
         Examples
         --------
@@ -2836,7 +2868,23 @@ class Model:
         >>> dynare_code = model.to_dynare(output_path="my_model.mod")
         >>> # Include steady state computation
         >>> dynare_code = model.to_dynare(steady=True)
+        >>> dynare_code = model.to_dynare(compute_irfs=True)
+        >>> dynare_code = model.to_dynare(compute_irfs=True, irf_var_list=["y", "c"])
+        >>> # Include perfect foresight regime changes
+        >>> from equilibrium.solvers.det_spec import DetSpec
+        >>> spec = DetSpec(preset_par_init={"delta": 0.1})
+        >>> spec.add_regime(0, preset_par_regime={"delta": 0.15}, time_regime=10)
+        >>> dynare_code = model.to_dynare(det_spec=spec, det_spec_periods=100)
         """
         from ..io.dynare import export_to_dynare
 
-        return export_to_dynare(self, output_path=output_path, steady=steady)
+        return export_to_dynare(
+            self,
+            output_path=output_path,
+            steady=steady,
+            compute_irfs=compute_irfs,
+            irf_var_list=irf_var_list,
+            det_spec=det_spec,
+            det_spec_periods=det_spec_periods,
+            det_spec_solver_kwargs=det_spec_solver_kwargs,
+        )
