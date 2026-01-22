@@ -244,6 +244,19 @@ def test_to_dynare_initval_with_solved_analytical_steady():
     assert "log_K = log(I / delta);" not in content
 
 
+def test_to_dynare_has_shocks_block():
+    """Test that shocks block is generated with stderr = 1.0."""
+    mod = create_simple_rbc_model()
+
+    content = mod.to_dynare()
+
+    # Check that shocks block is present
+    assert "shocks;" in content
+
+    # Check that the shock for Z_til is defined with stderr = 1.0
+    assert "var e_Z_til; stderr 1.0;" in content
+
+
 def test_to_dynare_structure():
     """Test the overall structure of the Dynare .mod file."""
     mod = create_simple_rbc_model()
@@ -256,6 +269,7 @@ def test_to_dynare_structure():
     varexo_idx = content.find("varexo")
     model_idx = content.find("model;")
     initval_idx = content.find("initval;")
+    shocks_idx = content.find("shocks;")
 
     # All should be present (>= 0, not necessarily > 0)
     assert param_idx >= 0
@@ -263,9 +277,28 @@ def test_to_dynare_structure():
     assert varexo_idx >= 0
     assert model_idx >= 0
     assert initval_idx >= 0
+    assert shocks_idx >= 0
 
     # And in the correct order
-    assert param_idx < var_idx < varexo_idx < model_idx < initval_idx
+    assert param_idx < var_idx < varexo_idx < model_idx < initval_idx < shocks_idx
+
+
+def test_to_dynare_steady_command():
+    """Test that steady=True adds the steady command."""
+    mod = create_simple_rbc_model()
+
+    # Without steady parameter (default False)
+    content_no_steady = mod.to_dynare()
+    assert "steady;" not in content_no_steady
+
+    # With steady=True
+    content_with_steady = mod.to_dynare(steady=True)
+    assert "steady;" in content_with_steady
+
+    # Verify it appears after shocks block
+    shocks_end = content_with_steady.find("end;", content_with_steady.find("shocks;"))
+    steady_idx = content_with_steady.find("steady;")
+    assert steady_idx > shocks_end, "steady; should appear after shocks block"
 
 
 if __name__ == "__main__":
