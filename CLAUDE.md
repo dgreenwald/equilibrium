@@ -290,6 +290,178 @@ z_path = spec.build_exog_paths(model, Nt=100, regime=0)
 
 Results are stored in `DeterministicResult` and `SequenceResult` containers (`solvers/results.py`) with save/load support for NPZ, JSON, and CSV formats.
 
+### Overlaying Data on Plots
+
+The `plot_deterministic_results()` function supports overlaying external data (e.g., empirical observations, alternative model outputs) on simulation plots for direct visual comparison. This is useful for model validation, calibration, and comparing simulations with real-world data.
+
+**Basic Usage with Default Styling:**
+
+```python
+from equilibrium.plot import plot_deterministic_results
+
+# Simulate model
+model.solve_steady(calibrate=True)
+model.linearize()
+simulation_result = deterministic.solve(model, z_path)
+
+# Empirical data as dict (variable name -> array)
+empirical_data = {
+    'consumption': np.array([1.0, 1.05, 1.08, 1.12, 1.15]),
+    'output': np.array([2.0, 2.1, 2.15, 2.22, 2.3]),
+}
+
+# Plot with overlay (default: black dash-dot line)
+paths = plot_deterministic_results(
+    [simulation_result],
+    overlay_data=empirical_data,
+    overlay_name="Empirical Data",
+    result_names=["Model"],
+    include_list=['consumption', 'output'],
+    plot_dir="output/comparison",
+)
+```
+
+**Array Overlay:**
+
+```python
+# Overlay as numpy array (requires variable names)
+data_array = np.column_stack([consumption_data, output_data])
+
+paths = plot_deterministic_results(
+    [simulation_result],
+    overlay_data=data_array,
+    overlay_var_names=['consumption', 'output'],
+    overlay_name="Historical Data",
+    result_names=["Model"],
+)
+```
+
+**Custom Styling with overlay_kwargs:**
+
+The `overlay_kwargs` parameter provides direct control over overlay appearance with standard matplotlib kwargs:
+
+```python
+paths = plot_deterministic_results(
+    [simulation_result],
+    overlay_data=empirical_data,
+    overlay_name="Data",
+    overlay_kwargs={
+        'linestyle': ':',      # Dotted line
+        'linewidth': 2.5,      # Thicker line
+        'color': 'red',        # Red color
+        'alpha': 0.8,          # Slight transparency
+    },
+)
+```
+
+**Style Presets:**
+
+Use built-in presets for common overlay styles:
+
+```python
+# Available presets: 'dashdot', 'dashed', 'dotted', 'markers'
+paths = plot_deterministic_results(
+    [simulation_result],
+    overlay_data=empirical_data,
+    overlay_name="Data",
+    overlay_style='markers',    # Scatter plot with markers
+    overlay_color='navy',        # Navy blue
+)
+```
+
+**Full Control with PlotSpec:**
+
+For maximum control, use `PlotSpec` (highest priority):
+
+```python
+from equilibrium.plot import PlotSpec
+
+overlay_spec = PlotSpec(
+    group_colors={'Empirical Data': 'darkgreen'},
+    group_styles={'Empirical Data': '-.'},
+    marker_styles={'Empirical Data': 's'},  # Square markers
+)
+
+paths = plot_deterministic_results(
+    [simulation_result],
+    overlay_data=empirical_data,
+    overlay_name="Empirical Data",
+    overlay_spec=overlay_spec,
+)
+```
+
+**Styling Priority:**
+
+When multiple styling parameters are provided, priority is:
+1. `overlay_spec` (highest - full PlotSpec control)
+2. `overlay_kwargs` (direct matplotlib kwargs)
+3. `overlay_style` + `overlay_color` (preset combinations)
+4. Defaults (black dash-dot line if nothing specified)
+
+**Advanced Use Cases:**
+
+```python
+# Standalone overlay (no simulation results)
+paths = plot_deterministic_results(
+    overlay_data=empirical_data,
+    overlay_name="Historical Data",
+    include_list=['consumption', 'output'],
+)
+
+# Multiple simulation results + overlay
+paths = plot_deterministic_results(
+    [baseline_result, alternative_result],
+    overlay_data=empirical_data,
+    overlay_name="Data",
+    result_names=["Baseline", "Alternative"],
+    overlay_style='dashed',
+    overlay_color='red',
+)
+
+# With SequenceResult
+spec = DetSpec(n_regimes=2, time_list=[10])
+seq_result = deterministic.solve_sequence(spec, model, Nt=30)
+
+paths = plot_deterministic_results(
+    [seq_result],
+    overlay_data=empirical_data,
+    overlay_name="Data",
+    T_max=25,  # Truncate sequence
+)
+
+# With series transforms (applied to both simulation and overlay)
+paths = plot_deterministic_results(
+    [result],
+    overlay_data={'log_Y': np.log([1.0, 1.1, 1.2])},
+    series_transforms={'log_Y': SeriesTransform(log_to_level=True)},
+)
+```
+
+**Edge Cases and Behavior:**
+
+- **Partial variables**: If overlay has only some variables, simulation-only variables show NaN for overlay
+- **Extra variables**: If overlay has variables not in simulation, they appear with NaN for simulation series
+- **Different lengths**: Plot truncates to minimum length across all series
+- **Missing var_names**: Array overlay without `overlay_var_names` raises `ValueError`
+
+**Helper Function:**
+
+For advanced use cases, `overlay_to_result()` converts external data to `DeterministicResult` format:
+
+```python
+from equilibrium.plot import overlay_to_result
+
+overlay_result = overlay_to_result(
+    overlay_data=empirical_data,
+    overlay_name="Empirical",
+    reference_result=simulation_result,  # Align variables
+    fill_missing=True,  # Fill missing vars with NaN
+)
+
+# Now manually include in plot
+paths = plot_deterministic_results([simulation_result, overlay_result])
+```
+
 ## JAX-Specific Guidelines
 
 ### Core Principles

@@ -13,7 +13,12 @@ import numpy as np
 import pytest
 
 from equilibrium import Model
-from equilibrium.plot import PlotSpec, plot_deterministic_results, plot_model_irfs
+from equilibrium.plot import (
+    PlotSpec,
+    overlay_to_result,
+    plot_deterministic_results,
+    plot_model_irfs,
+)
 from equilibrium.settings import get_settings
 from equilibrium.solvers import deterministic
 from equilibrium.solvers.det_spec import DetSpec
@@ -1158,6 +1163,622 @@ class TestPlotModelIrfs:
                     plot_dir=tmpdir,
                     n_periods=100,  # Much larger than computed horizon
                 )
+
+
+class TestOverlayToResult:
+    """Unit tests for overlay_to_result helper function."""
+
+    def test_dict_conversion(self):
+        """Test converting dict overlay_data to DeterministicResult."""
+        overlay_dict = {
+            "consumption": np.array([1.0, 1.1, 1.2, 1.3]),
+            "output": np.array([2.0, 2.1, 2.2, 2.3]),
+        }
+
+        result = overlay_to_result(overlay_dict, overlay_name="Empirical")
+
+        assert result.UX.shape == (4, 2)
+        assert result.var_names == ["consumption", "output"]
+        assert result.model_label == "Empirical"
+        assert result.converged is True
+        assert result.final_residual == 0.0
+        assert np.allclose(result.UX[:, 0], [1.0, 1.1, 1.2, 1.3])
+        assert np.allclose(result.UX[:, 1], [2.0, 2.1, 2.2, 2.3])
+
+    def test_array_conversion(self):
+        """Test converting array overlay_data to DeterministicResult."""
+        overlay_array = np.array([[1.0, 2.0], [1.1, 2.1], [1.2, 2.2]])
+        var_names = ["c", "y"]
+
+        result = overlay_to_result(
+            overlay_array, overlay_var_names=var_names, overlay_name="Data"
+        )
+
+        assert result.UX.shape == (3, 2)
+        assert result.var_names == ["c", "y"]
+        assert result.model_label == "Data"
+        assert np.allclose(result.UX[:, 0], [1.0, 1.1, 1.2])
+        assert np.allclose(result.UX[:, 1], [2.0, 2.1, 2.2])
+
+    def test_array_1d_conversion(self):
+        """Test converting 1D array to DeterministicResult."""
+        overlay_array = np.array([1.0, 1.1, 1.2])
+        var_names = ["c"]
+
+        result = overlay_to_result(
+            overlay_array, overlay_var_names=var_names, overlay_name="Data"
+        )
+
+        assert result.UX.shape == (3, 1)
+        assert result.var_names == ["c"]
+        assert np.allclose(result.UX[:, 0], [1.0, 1.1, 1.2])
+
+    def test_array_without_var_names_raises(self):
+        """Test that array without var_names raises ValueError."""
+        overlay_array = np.array([[1.0, 2.0], [1.1, 2.1]])
+
+        with pytest.raises(ValueError, match="overlay_var_names must be provided"):
+            overlay_to_result(overlay_array)
+
+    def test_fill_missing_with_reference(self):
+        """Test filling missing variables with NaN when reference provided."""
+        # Reference result has 3 variables
+        reference = DeterministicResult(
+            UX=np.ones((5, 3)),
+            Z=np.zeros((5, 1)),
+            var_names=["c", "y", "k"],
+            exog_names=["Z_til"],
+        )
+
+        # Overlay only has 2 variables
+        overlay_dict = {
+            "c": np.array([1.0, 1.1, 1.2, 1.3, 1.4]),
+            "y": np.array([2.0, 2.1, 2.2, 2.3, 2.4]),
+        }
+
+        result = overlay_to_result(
+            overlay_dict,
+            overlay_name="Partial",
+            reference_result=reference,
+            fill_missing=True,
+        )
+
+        # Should have 3 columns (c, y, k)
+        assert result.UX.shape == (5, 3)
+        assert result.var_names == ["c", "y", "k"]
+        assert np.allclose(result.UX[:, 0], [1.0, 1.1, 1.2, 1.3, 1.4])
+        assert np.allclose(result.UX[:, 1], [2.0, 2.1, 2.2, 2.3, 2.4])
+        assert np.all(np.isnan(result.UX[:, 2]))  # k should be NaN
+
+    def test_extra_variables_appended(self):
+        """Test that overlay variables not in reference are appended."""
+        # Reference result has 2 variables
+        reference = DeterministicResult(
+            UX=np.ones((3, 2)),
+            Z=np.zeros((3, 1)),
+            var_names=["c", "y"],
+            exog_names=["Z_til"],
+        )
+
+        # Overlay has 3 variables including one not in reference
+        overlay_dict = {
+            "c": np.array([1.0, 1.1, 1.2]),
+            "y": np.array([2.0, 2.1, 2.2]),
+            "k": np.array([3.0, 3.1, 3.2]),
+        }
+
+        result = overlay_to_result(
+            overlay_dict,
+            overlay_name="Extended",
+            reference_result=reference,
+            fill_missing=True,
+        )
+
+        # Should have 3 columns in reference order + extras
+        assert result.UX.shape == (3, 3)
+        assert result.var_names == ["c", "y", "k"]
+        assert np.allclose(result.UX[:, 0], [1.0, 1.1, 1.2])
+        assert np.allclose(result.UX[:, 1], [2.0, 2.1, 2.2])
+        assert np.allclose(result.UX[:, 2], [3.0, 3.1, 3.2])
+
+    def test_inconsistent_array_lengths_raises(self):
+        """Test that dict with inconsistent array lengths raises ValueError."""
+        overlay_dict = {
+            "c": np.array([1.0, 1.1, 1.2]),
+            "y": np.array([2.0, 2.1]),  # Different length!
+        }
+
+        with pytest.raises(ValueError, match="same length"):
+            overlay_to_result(overlay_dict)
+
+    def test_mismatched_var_names_count_raises(self):
+        """Test that mismatched var_names count raises ValueError."""
+        overlay_array = np.array([[1.0, 2.0], [1.1, 2.1]])
+        var_names = ["c"]  # Only 1 name for 2 columns
+
+        with pytest.raises(ValueError, match="must match"):
+            overlay_to_result(overlay_array, overlay_var_names=var_names)
+
+    def test_metadata_correctness(self):
+        """Test that metadata fields are set correctly."""
+        overlay_dict = {"c": np.array([1.0, 1.1])}
+
+        result = overlay_to_result(overlay_dict, overlay_name="TestData")
+
+        assert result.model_label == "TestData"
+        assert result.converged is True
+        assert result.final_residual == 0.0
+        assert result.Z.shape == (2, 1)
+        assert np.all(result.Z == 0.0)
+        assert result.exog_names == ["_placeholder"]
+        assert result.y_names == []
+        assert result.Y is None
+
+    def test_invalid_type_raises(self):
+        """Test that invalid overlay_data type raises TypeError."""
+        with pytest.raises(TypeError, match="numpy array or dict"):
+            overlay_to_result("not an array or dict")
+
+
+class TestPlotOverlayData:
+    """Integration tests for overlay functionality in plot_deterministic_results."""
+
+    def test_basic_dict_overlay(self):
+        """Test basic overlay with dict data."""
+        mod = set_model()
+        mod.solve_steady(calibrate=True)
+        mod.linearize()
+
+        Nt = 10
+        z_trans = np.zeros((Nt + 1, mod.N["z"])) + mod.steady_components["z"]
+        simulation = deterministic.solve(mod, z_trans)
+
+        # Create overlay data
+        overlay_dict = {
+            "I": np.linspace(0.5, 0.6, Nt + 1),
+            "log_K": np.linspace(np.log(6.0), np.log(6.2), Nt + 1),
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            paths = plot_deterministic_results(
+                [simulation],
+                overlay_data=overlay_dict,
+                overlay_name="Empirical",
+                include_list=["I", "log_K"],
+                plot_dir=tmpdir,
+                result_names=["Model"],
+                prefix="dict_overlay",
+            )
+
+            assert len(paths) > 0
+            for path in paths:
+                assert path.exists()
+
+    def test_basic_array_overlay(self):
+        """Test basic overlay with array data."""
+        mod = set_model()
+        mod.solve_steady(calibrate=True)
+        mod.linearize()
+
+        Nt = 10
+        z_trans = np.zeros((Nt + 1, mod.N["z"])) + mod.steady_components["z"]
+        simulation = deterministic.solve(mod, z_trans)
+
+        # Create overlay data as array
+        overlay_array = np.column_stack(
+            [
+                np.linspace(0.5, 0.6, Nt + 1),
+                np.linspace(np.log(6.0), np.log(6.2), Nt + 1),
+            ]
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            paths = plot_deterministic_results(
+                [simulation],
+                overlay_data=overlay_array,
+                overlay_var_names=["I", "log_K"],
+                overlay_name="Historical",
+                include_list=["I", "log_K"],
+                plot_dir=tmpdir,
+                result_names=["Model"],
+                prefix="array_overlay",
+            )
+
+            assert len(paths) > 0
+            for path in paths:
+                assert path.exists()
+
+    def test_partial_variables_overlay(self):
+        """Test overlay with only some variables present."""
+        mod = set_model()
+        mod.solve_steady(calibrate=True)
+        mod.linearize()
+
+        Nt = 10
+        z_trans = np.zeros((Nt + 1, mod.N["z"])) + mod.steady_components["z"]
+        simulation = deterministic.solve(mod, z_trans)
+
+        # Overlay only has one variable
+        overlay_dict = {"I": np.linspace(0.5, 0.6, Nt + 1)}
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            paths = plot_deterministic_results(
+                [simulation],
+                overlay_data=overlay_dict,
+                overlay_name="Partial Data",
+                include_list=["I", "log_K"],
+                plot_dir=tmpdir,
+                result_names=["Model"],
+                prefix="partial_overlay",
+            )
+
+            assert len(paths) > 0
+            for path in paths:
+                assert path.exists()
+
+    def test_extra_variables_overlay(self):
+        """Test overlay with variables not in simulation."""
+        mod = set_model()
+        mod.solve_steady(calibrate=True)
+        mod.linearize()
+
+        Nt = 10
+        z_trans = np.zeros((Nt + 1, mod.N["z"])) + mod.steady_components["z"]
+        simulation = deterministic.solve(mod, z_trans)
+
+        # Overlay has extra variable not in simulation
+        overlay_dict = {
+            "I": np.linspace(0.5, 0.6, Nt + 1),
+            "extra_var": np.linspace(1.0, 2.0, Nt + 1),
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            paths = plot_deterministic_results(
+                [simulation],
+                overlay_data=overlay_dict,
+                overlay_name="Extended Data",
+                include_list=["I", "extra_var"],
+                plot_dir=tmpdir,
+                result_names=["Model"],
+                prefix="extra_overlay",
+            )
+
+            assert len(paths) > 0
+            for path in paths:
+                assert path.exists()
+
+    def test_different_time_lengths(self):
+        """Test overlay with different time length than simulation."""
+        mod = set_model()
+        mod.solve_steady(calibrate=True)
+        mod.linearize()
+
+        Nt = 10
+        z_trans = np.zeros((Nt + 1, mod.N["z"])) + mod.steady_components["z"]
+        simulation = deterministic.solve(mod, z_trans)
+
+        # Overlay has different length
+        overlay_dict = {
+            "I": np.linspace(0.5, 0.6, 15),  # Longer
+            "log_K": np.linspace(np.log(6.0), np.log(6.2), 15),
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Should truncate to minimum length
+            paths = plot_deterministic_results(
+                [simulation],
+                overlay_data=overlay_dict,
+                overlay_name="Longer Data",
+                include_list=["I", "log_K"],
+                plot_dir=tmpdir,
+                result_names=["Model"],
+                prefix="length_mismatch",
+            )
+
+            assert len(paths) > 0
+            for path in paths:
+                assert path.exists()
+
+    def test_dashdot_style_preset(self):
+        """Test overlay with dashdot style preset."""
+        result = DeterministicResult(
+            UX=np.ones((5, 2)),
+            Z=np.zeros((5, 1)),
+            var_names=["I", "log_K"],
+            exog_names=["Z_til"],
+        )
+
+        overlay_dict = {"I": np.array([1.1, 1.2, 1.3, 1.4, 1.5])}
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            paths = plot_deterministic_results(
+                [result],
+                overlay_data=overlay_dict,
+                overlay_name="Data",
+                overlay_style="dashdot",
+                include_list=["I"],
+                plot_dir=tmpdir,
+                prefix="dashdot",
+            )
+
+            assert len(paths) > 0
+            for path in paths:
+                assert path.exists()
+
+    def test_dashed_style_preset(self):
+        """Test overlay with dashed style preset."""
+        result = DeterministicResult(
+            UX=np.ones((5, 2)),
+            Z=np.zeros((5, 1)),
+            var_names=["I", "log_K"],
+            exog_names=["Z_til"],
+        )
+
+        overlay_dict = {"I": np.array([1.1, 1.2, 1.3, 1.4, 1.5])}
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            paths = plot_deterministic_results(
+                [result],
+                overlay_data=overlay_dict,
+                overlay_name="Data",
+                overlay_style="dashed",
+                include_list=["I"],
+                plot_dir=tmpdir,
+                prefix="dashed",
+            )
+
+            assert len(paths) > 0
+            for path in paths:
+                assert path.exists()
+
+    def test_markers_style_preset(self):
+        """Test overlay with markers style preset."""
+        result = DeterministicResult(
+            UX=np.ones((5, 2)),
+            Z=np.zeros((5, 1)),
+            var_names=["I", "log_K"],
+            exog_names=["Z_til"],
+        )
+
+        overlay_dict = {"I": np.array([1.1, 1.2, 1.3, 1.4, 1.5])}
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            paths = plot_deterministic_results(
+                [result],
+                overlay_data=overlay_dict,
+                overlay_name="Data",
+                overlay_style="markers",
+                include_list=["I"],
+                plot_dir=tmpdir,
+                prefix="markers",
+            )
+
+            assert len(paths) > 0
+            for path in paths:
+                assert path.exists()
+
+    def test_custom_color(self):
+        """Test overlay with custom color."""
+        result = DeterministicResult(
+            UX=np.ones((5, 2)),
+            Z=np.zeros((5, 1)),
+            var_names=["I", "log_K"],
+            exog_names=["Z_til"],
+        )
+
+        overlay_dict = {"I": np.array([1.1, 1.2, 1.3, 1.4, 1.5])}
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            paths = plot_deterministic_results(
+                [result],
+                overlay_data=overlay_dict,
+                overlay_name="Data",
+                overlay_color="red",
+                include_list=["I"],
+                plot_dir=tmpdir,
+                prefix="custom_color",
+            )
+
+            assert len(paths) > 0
+            for path in paths:
+                assert path.exists()
+
+    def test_overlay_kwargs(self):
+        """Test overlay with direct kwargs."""
+        result = DeterministicResult(
+            UX=np.ones((5, 2)),
+            Z=np.zeros((5, 1)),
+            var_names=["I", "log_K"],
+            exog_names=["Z_til"],
+        )
+
+        overlay_dict = {"I": np.array([1.1, 1.2, 1.3, 1.4, 1.5])}
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            paths = plot_deterministic_results(
+                [result],
+                overlay_data=overlay_dict,
+                overlay_name="Data",
+                overlay_kwargs={"linestyle": ":", "color": "navy"},
+                include_list=["I"],
+                plot_dir=tmpdir,
+                prefix="kwargs",
+            )
+
+            assert len(paths) > 0
+            for path in paths:
+                assert path.exists()
+
+    def test_full_plot_spec(self):
+        """Test overlay with full PlotSpec."""
+        result = DeterministicResult(
+            UX=np.ones((5, 2)),
+            Z=np.zeros((5, 1)),
+            var_names=["I", "log_K"],
+            exog_names=["Z_til"],
+        )
+
+        overlay_dict = {"I": np.array([1.1, 1.2, 1.3, 1.4, 1.5])}
+
+        overlay_spec = PlotSpec(
+            group_colors={"Data": "green"},
+            group_styles={"Data": "--"},
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            paths = plot_deterministic_results(
+                [result],
+                overlay_data=overlay_dict,
+                overlay_name="Data",
+                overlay_spec=overlay_spec,
+                include_list=["I"],
+                plot_dir=tmpdir,
+                prefix="plot_spec",
+            )
+
+            assert len(paths) > 0
+            for path in paths:
+                assert path.exists()
+
+    def test_array_without_var_names_raises(self):
+        """Test that array overlay without var_names raises ValueError."""
+        result = DeterministicResult(
+            UX=np.ones((5, 2)),
+            Z=np.zeros((5, 1)),
+            var_names=["I", "log_K"],
+            exog_names=["Z_til"],
+        )
+
+        overlay_array = np.array([[1.0, 2.0], [1.1, 2.1]])
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with pytest.raises(ValueError, match="overlay_var_names must be provided"):
+                plot_deterministic_results(
+                    [result],
+                    overlay_data=overlay_array,
+                    include_list=["I"],
+                    plot_dir=tmpdir,
+                )
+
+    def test_standalone_overlay(self):
+        """Test overlay without any simulation results."""
+        overlay_dict = {
+            "c": np.array([1.0, 1.1, 1.2, 1.3]),
+            "y": np.array([2.0, 2.1, 2.2, 2.3]),
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            paths = plot_deterministic_results(
+                overlay_data=overlay_dict,
+                overlay_name="Historical",
+                include_list=["c", "y"],
+                plot_dir=tmpdir,
+                prefix="standalone",
+            )
+
+            assert len(paths) > 0
+            for path in paths:
+                assert path.exists()
+
+    def test_with_sequence_result(self):
+        """Test overlay with SequenceResult."""
+        mod = set_model()
+        mod.solve_steady(calibrate=True)
+        mod.linearize()
+
+        spec = DetSpec(n_regimes=1)
+        spec.add_shock(0, "Z_til", 0, 0.1)
+
+        Nt = 15
+        seq_result = deterministic.solve_sequence(spec, mod, Nt, save_results=False)
+
+        overlay_dict = {
+            "I": np.linspace(0.5, 0.6, Nt),
+            "log_K": np.linspace(np.log(6.0), np.log(6.2), Nt),
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            paths = plot_deterministic_results(
+                [seq_result],
+                overlay_data=overlay_dict,
+                overlay_name="Data",
+                include_list=["I", "log_K"],
+                plot_dir=tmpdir,
+                prefix="with_sequence",
+            )
+
+            assert len(paths) > 0
+            for path in paths:
+                assert path.exists()
+
+    def test_with_series_transforms(self):
+        """Test overlay with series transforms applied."""
+        result = DeterministicResult(
+            UX=np.column_stack(
+                [np.log([1.0, 1.1, 1.2, 1.3]), np.array([1.0, 2.0, 3.0, 4.0])]
+            ),
+            Z=np.zeros((4, 1)),
+            var_names=["log_Y", "C"],
+            exog_names=["Z_til"],
+        )
+
+        overlay_dict = {
+            "log_Y": np.log([1.05, 1.15, 1.25, 1.35]),
+            "C": np.array([1.5, 2.5, 3.5, 4.5]),
+        }
+
+        transforms = {
+            "log_Y": SeriesTransform(log_to_level=True),
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            paths = plot_deterministic_results(
+                [result],
+                overlay_data=overlay_dict,
+                overlay_name="Data",
+                series_transforms=transforms,
+                include_list=["log_Y", "C"],
+                plot_dir=tmpdir,
+                prefix="with_transforms",
+            )
+
+            assert len(paths) > 0
+            for path in paths:
+                assert path.exists()
+
+    def test_multiple_results_with_overlay(self):
+        """Test overlay with multiple simulation results."""
+        mod = set_model()
+        mod.solve_steady(calibrate=True)
+        mod.linearize()
+
+        Nt = 10
+        z_trans1 = np.zeros((Nt + 1, mod.N["z"])) + mod.steady_components["z"]
+        result1 = deterministic.solve(mod, z_trans1)
+
+        z_trans2 = np.array(z_trans1, copy=True)
+        z_trans2[0, :] = z_trans2[0, :] + 0.1
+        result2 = deterministic.solve(mod, z_trans2)
+
+        overlay_dict = {
+            "I": np.linspace(0.5, 0.6, Nt + 1),
+            "log_K": np.linspace(np.log(6.0), np.log(6.2), Nt + 1),
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            paths = plot_deterministic_results(
+                [result1, result2],
+                overlay_data=overlay_dict,
+                overlay_name="Empirical",
+                include_list=["I", "log_K"],
+                plot_dir=tmpdir,
+                result_names=["Model 1", "Model 2"],
+                prefix="multi_with_overlay",
+            )
+
+            assert len(paths) > 0
+            for path in paths:
+                assert path.exists()
 
 
 if __name__ == "__main__":
