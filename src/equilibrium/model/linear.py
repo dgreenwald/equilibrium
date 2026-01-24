@@ -74,9 +74,11 @@ class LinearModel:
         else:
             raise ValueError(f"Unknown method: {method}")
 
-        # Intermediate variables
+        # Intermediate variables (core only)
         J = np.hstack(
-            tuple(m.derivatives["intermediates"][var] for var in ["u", "x", "z"])
+            tuple(
+                m.derivatives["intermediates_core"][var] for var in ["u", "x", "z"]
+            )
         )
 
         # Expectations vars
@@ -94,11 +96,12 @@ class LinearModel:
 
         L_s = np.hstack(
             tuple(
-                m.derivatives["expectations_variables"][var] for var in ["u", "x", "z"]
+                m.derivatives["expectations_variables_core"][var]
+                for var in ["u", "x", "z"]
             )
         )
 
-        L_E = m.derivatives["expectations_variables"]["E"]
+        L_E = m.derivatives["expectations_variables_core"]["E"]
 
         L = L_s + L_E @ K
 

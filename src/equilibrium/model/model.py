@@ -2249,7 +2249,19 @@ class Model:
             for key, value in serializable.items()
         }
 
-    def compute_derivatives(self, u, x, z, u_new, x_new, z_new, params, E=None, include_params=False):
+    def compute_derivatives(
+        self,
+        u,
+        x,
+        z,
+        u_new,
+        x_new,
+        z_new,
+        params,
+        E=None,
+        include_params=False,
+        include_full=False,
+    ):
         """
         Compute derivatives of model functions.
 
@@ -2267,6 +2279,9 @@ class Model:
             Whether to compute derivatives with respect to params.
             Set to True for sensitivity analysis or parameter calibration.
             Linearization does not require params derivatives.
+        include_full : bool, default False
+            Whether to compute derivatives for full intermediates and
+            expectations_variables functions.
 
         Returns
         -------
@@ -2293,7 +2308,11 @@ class Model:
         }
 
         self.derivatives = {}
+        skip_full = {"intermediates", "expectations_variables"}
+
         for key, arg_list in self.arg_lists.items():
+            if (not include_full) and key in skip_full:
+                continue
             self.derivatives[key] = {}
             these_args = arg_dict[key]
             for var in arg_list:
@@ -2304,7 +2323,7 @@ class Model:
 
         return None
 
-    def steady_state_derivatives(self, include_params=False):
+    def steady_state_derivatives(self, include_params=False, include_full=False):
         """
         Compute derivatives at the steady state.
 
@@ -2322,7 +2341,17 @@ class Model:
             init_vals["z"],
             init_vals["params"],
         )
-        self.compute_derivatives(u, x, z, u, x, z, params, include_params=include_params)
+        self.compute_derivatives(
+            u,
+            x,
+            z,
+            u,
+            x,
+            z,
+            params,
+            include_params=include_params,
+            include_full=include_full,
+        )
 
     def get_s_steady(self):
 
