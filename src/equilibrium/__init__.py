@@ -5,6 +5,12 @@ Equilibrium – Dynamic general-equilibrium solver in JAX
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _v
 
+# Initialize settings early to configure JAX (compilation cache, x64 precision)
+# before any JAX code is imported
+from .settings import get_settings as _get_settings
+
+_get_settings()
+
 from . import blocks
 from .io import load_results, resolve_output_path, save_results
 from .model import LinearModel, Model

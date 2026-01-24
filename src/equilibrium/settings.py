@@ -53,6 +53,38 @@ class DebugConfig(BaseModel):
     keep_iteration_logs: Optional[int] = 5
 
 
+class JaxConfig(BaseModel):
+    """
+    Configuration for JAX runtime behavior.
+
+    Attributes:
+        compilation_cache_enabled: Whether to enable persistent compilation caching.
+            When enabled, JAX saves compiled functions to disk, dramatically speeding
+            up subsequent runs ("warm runs") by avoiding recompilation.
+        compilation_cache_dir: Directory for the compilation cache. If None, uses
+            a subdirectory of data_dir.
+        min_compile_time_secs: Minimum compilation time (in seconds) before a function
+            is cached. Set to 0.0 to cache everything, or higher to only cache
+            expensive compilations.
+        enable_x64: Whether to enable 64-bit floating point precision (required for
+            economic modeling). Default True.
+    """
+
+    compilation_cache_enabled: bool = True
+    compilation_cache_dir: Optional[Path] = None
+    min_compile_time_secs: float = 0.0
+    enable_x64: bool = True
+
+    @field_validator("compilation_cache_dir", mode="before")
+    @classmethod
+    def _expanduser(cls, v):
+        if isinstance(v, str):
+            return Path(v).expanduser()
+        if isinstance(v, Path):
+            return v.expanduser()
+        return v
+
+
 def _default_data_dir() -> Path:
     return Path(user_data_dir(APP_NAME)).expanduser()
 
@@ -68,6 +100,7 @@ class Paths(BaseModel):
     log_dir: Optional[Path] = None
     debug_dir: Optional[Path] = None
     plot_dir: Optional[Path] = None
+    jax_cache_dir: Optional[Path] = None
 
     @field_validator("*", mode="before")
     @classmethod
@@ -93,6 +126,8 @@ class Paths(BaseModel):
             self.debug_dir = base / "debug"
         if self.plot_dir is None:
             self.plot_dir = base / "plots"
+        if self.jax_cache_dir is None:
+            self.jax_cache_dir = base / "jax_cache"
         return self
 
     def ensure_exists(self) -> "Paths":
@@ -102,6 +137,7 @@ class Paths(BaseModel):
             self.log_dir,
             self.debug_dir,
             self.plot_dir,
+            self.jax_cache_dir,
         ]:
             if isinstance(p, Path):
                 p.mkdir(parents=True, exist_ok=True)
@@ -125,6 +161,9 @@ class Settings(BaseSettings):
     # Debug configuration
     debug: DebugConfig = Field(default_factory=DebugConfig)
 
+    # JAX configuration
+    jax: JaxConfig = Field(default_factory=JaxConfig)
+
     # other toggles you might add later, kept minimal for now
     verbose: bool = False
     seed: Optional[int] = None
@@ -140,6 +179,34 @@ class Settings(BaseSettings):
     def ensure_dirs(self) -> "Settings":
         self.paths.ensure_exists()
         return self
+
+
+def _configure_jax(settings: Settings) -> None:
+    """
+    Configure JAX runtime settings based on the Settings object.
+
+    This function should be called once during initialization to set up:
+    - Persistent compilation caching (dramatically speeds up subsequent runs)
+    - 64-bit precision (required for economic modeling)
+    """
+    import jax
+
+    # Enable 64-bit precision
+    if settings.jax.enable_x64:
+        jax.config.update("jax_enable_x64", True)
+
+    # Configure persistent compilation cache
+    if settings.jax.compilation_cache_enabled:
+        # Use configured path or fall back to paths.jax_cache_dir
+        cache_dir = settings.jax.compilation_cache_dir or settings.paths.jax_cache_dir
+        if cache_dir is not None:
+            cache_dir = Path(cache_dir)
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            jax.config.update("jax_compilation_cache_dir", str(cache_dir))
+            jax.config.update(
+                "jax_persistent_cache_min_compile_time_secs",
+                settings.jax.min_compile_time_secs,
+            )
 
 
 @lru_cache
@@ -170,6 +237,9 @@ def get_settings() -> Settings:
     s = Settings(**s.model_dump(exclude_unset=True))
 
     s = s.ensure_dirs()
+
+    # Configure JAX (compilation cache, precision, etc.)
+    _configure_jax(s)
 
     # Auto-configure logging if enabled
     if s.logging.enabled:
