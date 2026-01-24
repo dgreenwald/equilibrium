@@ -384,7 +384,7 @@ class LinearModel:
             # Get variable names
             var_names = m.var_lists["u"] + m.var_lists["x"]
             exog_names = m.exog_list
-            y_names = m.var_lists.get("intermediate", [])
+            y_names = m.linear_y_names() if hasattr(m, "linear_y_names") else []
 
             # Create IrfResult for this shock
             irf_result = IrfResult(

@@ -209,7 +209,7 @@ class TestSolveSequenceLinear:
             spec, mod, Nt, ux_init=ux_init, y_init=y_init
         )
 
-        assert np.allclose(result.regimes[0].Y[0, :], y_init)
+        assert np.allclose(result.regimes[0].Y[0, : y_init.shape[0]], y_init)
 
     def test_empty_spec_error(self):
         """Test that solve_sequence_linear raises error with empty DetSpec."""

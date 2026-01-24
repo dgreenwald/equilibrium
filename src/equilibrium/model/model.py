@@ -912,38 +912,44 @@ class Model:
         # Useful for mapping letters to numbers
         self.arg_lists = {
             "transition": ["u", "x", "z", "params"],
+            "transition_core": ["u", "x", "z", "params"],
             "expectations": ["u", "x", "z", "u_new", "x_new", "z_new", "params"],
+            "expectations_core": ["u", "x", "z", "u_new", "x_new", "z_new", "params"],
             "optimality": ["u", "x", "z", "E", "params"],
+            "optimality_core": ["u", "x", "z", "E", "params"],
             "intermediates": ["u", "x", "z", "params"],
             "expectations_variables": ["u", "x", "z", "E", "params"],
+            "intermediates_core": ["u", "x", "z", "params"],
+            "intermediates_extra": ["u", "x", "z", "params"],
+            "expectations_variables_core": ["u", "x", "z", "E", "params"],
+            "expectations_variables_extra": ["u", "x", "z", "E", "params"],
         }
 
         # Create FunctionBundle instances for each function
         # If we have shared bundles (from update_copy), reuse them
-        if self._shared_function_bundles is not None:
-            # Reuse the shared function bundles (no changes needed)
-            pass
-        else:
+        if self._shared_function_bundles is None:
             # Create new function bundles (one per function, not per argnum)
             self._shared_function_bundles = {}
 
-            for key, var_list in self.arg_lists.items():
-                fn = getattr(self, key)  # fetch the bound method ONCE
+        for key, var_list in self.arg_lists.items():
+            if key in self._shared_function_bundles:
+                continue
+            fn = getattr(self, key)  # fetch the bound method ONCE
 
-                # Create a single FunctionBundle for all argnums for this function
-                # Pass list of argnums (indices) to create all jacobians at once
-                argnums_list = list(range(len(var_list)))
-                bundle = FunctionBundle(
-                    fn,
-                    argnums=argnums_list,
-                    has_aux=False,
-                )
+            # Create a single FunctionBundle for all argnums for this function
+            # Pass list of argnums (indices) to create all jacobians at once
+            argnums_list = list(range(len(var_list)))
+            bundle = FunctionBundle(
+                fn,
+                argnums=argnums_list,
+                has_aux=False,
+            )
 
-                # Store the bundle with a mapping from var name to argnum index
-                self._shared_function_bundles[key] = {
-                    "bundle": bundle,
-                    "var_to_argnum": {var: ii for ii, var in enumerate(var_list)},
-                }
+            # Store the bundle with a mapping from var name to argnum index
+            self._shared_function_bundles[key] = {
+                "bundle": bundle,
+                "var_to_argnum": {var: ii for ii, var in enumerate(var_list)},
+            }
 
         # from py_tools.utilities import tic, toc
         # Warm up the jacobians
@@ -1088,6 +1094,24 @@ class Model:
 
         return st1
 
+    def array_to_state_plus_intermediates_core(self, **kwargs):
+        """
+        Converts jax.numpy DeviceArrays to a state array with core intermediates only.
+        """
+
+        st0 = self.array_to_state(**kwargs)
+        st1 = self.inner_functions.intermediate_variables_core(st0)
+
+        return st1
+
+    def add_extras_to_state(self, st):
+        """
+        Populate extra variables on a state.
+        """
+        st = self.inner_functions.extra_intermediate_variables(st)
+        st = self.inner_functions.extra_read_expectations_variables(st)
+        return st
+
     def _format_expression_with_values(self, rule_str, state_dict):
         """
         Format an expression with variable values substituted in brackets.
@@ -1172,8 +1196,35 @@ class Model:
     def optimality(self, u, x, z, E, params):
 
         # u, x, z, E, params = standardize_args(u, x, z, E, params)
-        st = self.array_to_state_plus_intermediates(u=u, x=x, z=z, E=E, params=params)
-        st = self.inner_functions.read_expectations_variables(st)
+        st = self.array_to_state(u=u, x=x, z=z, E=E, params=params)
+        st = self.inner_functions.intermediate_variables_core(st)
+        st = self.inner_functions.read_expectations_variables_core(st)
+        st = self.inner_functions.extra_intermediate_variables(st)
+        st = self.inner_functions.extra_read_expectations_variables(st)
+        return self.inner_functions.optimality_inner(st)
+
+    def transition_core(self, u, x, z, params):
+
+        # u, x, z, params = standardize_args(u, x, z, params)
+        st = self.array_to_state(u=u, x=x, z=z, params=params)
+        st = self.inner_functions.intermediate_variables_core(st)
+        return self.inner_functions.transition_inner(st)
+
+    def expectations_core(self, u, x, z, u_new, x_new, z_new, params):
+
+        # u, x, z, u_new, x_new, z_new, params = standardize_args(u, x, z, u_new, x_new, z_new, params)
+        st = self.array_to_state(u=u, x=x, z=z, params=params)
+        st = self.inner_functions.intermediate_variables_core(st)
+        st_new = self.array_to_state(u=u_new, x=x_new, z=z_new, params=params)
+        st_new = self.inner_functions.intermediate_variables_core(st_new)
+        return self.inner_functions.expectations_inner(st, st_new)
+
+    def optimality_core(self, u, x, z, E, params):
+
+        # u, x, z, E, params = standardize_args(u, x, z, E, params)
+        st = self.array_to_state(u=u, x=x, z=z, E=E, params=params)
+        st = self.inner_functions.intermediate_variables_core(st)
+        st = self.inner_functions.read_expectations_variables_core(st)
         return self.inner_functions.optimality_inner(st)
 
     def intermediates(self, u, x, z, params):
@@ -1182,11 +1233,57 @@ class Model:
         st = self.array_to_state(u=u, x=x, z=z, params=params)
         return self.inner_functions.intermediate_variables_array(st)
 
+    def intermediates_core(self, u, x, z, params):
+
+        # u, x, z, params = standardize_args(u, x, z, params)
+        st = self.array_to_state(u=u, x=x, z=z, params=params)
+        st = self.inner_functions.intermediate_variables_core(st)
+        return jnp.array([getattr(st, var) for var in self._core_intermediate_vars])
+
+    def intermediates_extra(self, u, x, z, params):
+
+        # u, x, z, params = standardize_args(u, x, z, params)
+        st = self.array_to_state(u=u, x=x, z=z, params=params)
+        st = self.inner_functions.intermediate_variables_core(st)
+        st = self.inner_functions.extra_intermediate_variables(st)
+        return jnp.array([getattr(st, var) for var in self._extra_intermediate_vars])
+
     def expectations_variables(self, u, x, z, E, params):
 
         # u, x, z, E, params = standardize_args(u, x, z, E, params)
         st = self.array_to_state(u=u, x=x, z=z, E=E, params=params)
+        st = self.inner_functions.intermediate_variables_core(st)
         return self.inner_functions.read_expectations_variables_array(st)
+
+    def expectations_variables_core(self, u, x, z, E, params):
+
+        # u, x, z, E, params = standardize_args(u, x, z, E, params)
+        st = self.array_to_state(u=u, x=x, z=z, E=E, params=params)
+        st = self.inner_functions.intermediate_variables_core(st)
+        st = self.inner_functions.read_expectations_variables_core(st)
+        return jnp.array(
+            [getattr(st, var) for var in self._core_read_expectations_vars]
+        )
+
+    def expectations_variables_extra(self, u, x, z, E, params):
+
+        # u, x, z, E, params = standardize_args(u, x, z, E, params)
+        st = self.array_to_state(u=u, x=x, z=z, E=E, params=params)
+        st = self.inner_functions.intermediate_variables_core(st)
+        st = self.inner_functions.extra_intermediate_variables(st)
+        st = self.inner_functions.read_expectations_variables_core(st)
+        st = self.inner_functions.extra_read_expectations_variables(st)
+        return jnp.array(
+            [getattr(st, var) for var in self._extra_read_expectations_vars]
+        )
+
+    def linear_y_names(self):
+        return (
+            self._core_intermediate_vars
+            + self._extra_intermediate_vars
+            + self._core_read_expectations_vars
+            + self._extra_read_expectations_vars
+        )
 
     def dict_to_components(self, st):
 
@@ -1198,10 +1295,10 @@ class Model:
 
     def get_steady_err(self, u, x, z, params):
 
-        x_new = self.transition(u, x, z, params)
-        E = self.expectations(u, x, z, u, x, z, params)
+        x_new = self.transition_core(u, x, z, params)
+        E = self.expectations_core(u, x, z, u, x, z, params)
 
-        err_pol = self.optimality(u, x, z, E, params)
+        err_pol = self.optimality_core(u, x, z, E, params)
         err_trans = x_new - x
 
         err_all = jnp.hstack((err_trans, err_pol))
@@ -1556,24 +1653,28 @@ class Model:
                         u_hat = jnp.array([], dtype=jnp.float64)
                         x_hat = self.res_steady.x
 
-                    self.steady_dict = self.array_to_state_plus_intermediates(
+                    self.steady_dict = self.array_to_state_plus_intermediates_core(
                         u=u_hat, x=x_hat, z=init_vals["z"], params=init_vals["params"]
                     )
-                    self.steady_dict = self.inner_functions.read_expectations_variables(
-                        self.steady_dict
+                    self.steady_dict = (
+                        self.inner_functions.read_expectations_variables_core(
+                            self.steady_dict
+                        )
                     )
+                    self.steady_dict = self.add_extras_to_state(self.steady_dict)
             else:
                 # Both u and x are empty - all variables have analytical solutions
                 # No solver needed, just compute steady state directly
                 u_hat = jnp.array([], dtype=jnp.float64)
                 x_hat = jnp.array([], dtype=jnp.float64)
 
-                self.steady_dict = self.array_to_state_plus_intermediates(
+                self.steady_dict = self.array_to_state_plus_intermediates_core(
                     u=u_hat, x=x_hat, z=init_vals["z"], params=init_vals["params"]
                 )
-                self.steady_dict = self.inner_functions.read_expectations_variables(
+                self.steady_dict = self.inner_functions.read_expectations_variables_core(
                     self.steady_dict
                 )
+                self.steady_dict = self.add_extras_to_state(self.steady_dict)
 
                 # Create a successful result object for consistency
                 from types import SimpleNamespace
@@ -2178,10 +2279,17 @@ class Model:
 
         arg_dict = {
             "transition": (u, x, z, params),
+            "transition_core": (u, x, z, params),
             "expectations": (u, x, z, u_new, x_new, z_new, params),
+            "expectations_core": (u, x, z, u_new, x_new, z_new, params),
             "optimality": (u, x, z, E, params),
+            "optimality_core": (u, x, z, E, params),
             "intermediates": (u, x, z, params),
+            "intermediates_core": (u, x, z, params),
+            "intermediates_extra": (u, x, z, params),
             "expectations_variables": (u, x, z, E, params),
+            "expectations_variables_core": (u, x, z, E, params),
+            "expectations_variables_extra": (u, x, z, E, params),
         }
 
         self.derivatives = {}
@@ -2721,7 +2829,130 @@ class Model:
         for name in ["intermediate", "read_expectations"]:
             self.rules[name] = self.rp.sort_dependencies(self.rules[name], ignore_vars)
 
+        self._partition_derived_rules(ignore_vars)
         self._get_var_lists()
+
+    def _extract_rule_dependencies(self, rule):
+        deps = set(self.rp.p_word.findall(rule))
+        deps.update(self.rp.p_next.findall(rule))
+        return deps
+
+    def _collect_dependencies_for_rules(self, rules_dict):
+        return {
+            var: self._extract_rule_dependencies(rule)
+            for var, rule in rules_dict.items()
+        }
+
+    def _dependencies_from_rule_block(self, rules_dict):
+        deps = set()
+        for rule in rules_dict.values():
+            deps.update(self._extract_rule_dependencies(rule))
+        return deps
+
+    def _partition_derived_rules(self, ignore_vars):
+        intermediate_rules = self.rules["intermediate"]
+        read_expectations_rules = self.rules["read_expectations"]
+
+        intermediate_vars = set(intermediate_rules.keys())
+        read_expectations_vars = set(read_expectations_rules.keys())
+
+        deps_intermediate = self._collect_dependencies_for_rules(intermediate_rules)
+        deps_read_expectations = self._collect_dependencies_for_rules(
+            read_expectations_rules
+        )
+
+        targets_core = set()
+        for name in ["transition", "expectations", "optimality"]:
+            targets_core.update(self._dependencies_from_rule_block(self.rules[name]))
+
+        core_needed = set()
+        stack = list(targets_core)
+        while stack:
+            var = stack.pop()
+            if var in core_needed:
+                continue
+            core_needed.add(var)
+            if var in deps_intermediate:
+                stack.extend(deps_intermediate[var])
+            if var in deps_read_expectations:
+                stack.extend(deps_read_expectations[var])
+
+        core_intermediate_vars = intermediate_vars.intersection(core_needed)
+        core_read_expectations_vars = read_expectations_vars.intersection(core_needed)
+
+        extra_intermediate_vars = intermediate_vars.difference(core_intermediate_vars)
+        extra_read_expectations_vars = read_expectations_vars.difference(
+            core_read_expectations_vars
+        )
+
+        self._core_intermediate_vars = [
+            var for var in intermediate_rules.keys() if var in core_intermediate_vars
+        ]
+        self._core_read_expectations_vars = [
+            var
+            for var in read_expectations_rules.keys()
+            if var in core_read_expectations_vars
+        ]
+        self._extra_intermediate_vars = [
+            var for var in intermediate_rules.keys() if var in extra_intermediate_vars
+        ]
+        self._extra_read_expectations_vars = [
+            var
+            for var in read_expectations_rules.keys()
+            if var in extra_read_expectations_vars
+        ]
+
+        core_intermediate_rules = MyOrderedDict(
+            [
+                (var, rule)
+                for var, rule in intermediate_rules.items()
+                if var in core_intermediate_vars
+            ]
+        )
+        core_read_expectations_rules = MyOrderedDict(
+            [
+                (var, rule)
+                for var, rule in read_expectations_rules.items()
+                if var in core_read_expectations_vars
+            ]
+        )
+
+        extra_intermediate_rules = MyOrderedDict(
+            [
+                (var, rule)
+                for var, rule in intermediate_rules.items()
+                if var in extra_intermediate_vars
+            ]
+        )
+        extra_read_expectations_rules = MyOrderedDict(
+            [
+                (var, rule)
+                for var, rule in read_expectations_rules.items()
+                if var in extra_read_expectations_vars
+            ]
+        )
+
+        ignore_extra_intermediate = set(ignore_vars)
+        ignore_extra_intermediate.update(core_intermediate_vars)
+        ignore_extra_intermediate.update(core_read_expectations_vars)
+
+        ignore_extra_read_expectations = set(ignore_vars)
+        ignore_extra_read_expectations.update(core_intermediate_vars)
+        ignore_extra_read_expectations.update(core_read_expectations_vars)
+        ignore_extra_read_expectations.update(extra_intermediate_vars)
+
+        self._rules_intermediate_core = self.rp.sort_dependencies(
+            core_intermediate_rules, ignore_vars
+        )
+        self._rules_read_expectations_core = self.rp.sort_dependencies(
+            core_read_expectations_rules, ignore_vars
+        )
+        self._rules_extra_intermediate = self.rp.sort_dependencies(
+            extra_intermediate_rules, list(ignore_extra_intermediate)
+        )
+        self._rules_extra_read_expectations = self.rp.sort_dependencies(
+            extra_read_expectations_rules, list(ignore_extra_read_expectations)
+        )
 
     def _compile_rules(self):
         """
@@ -2754,18 +2985,47 @@ class Model:
             ("read_expectations", "read_expectations_variables"),
         ]:
 
-            ignore_vars = self.var_lists[key]
+            if key == "intermediate":
+                core_rules = self._rules_intermediate_core
+                extra_rules = self._rules_extra_intermediate
+                core_name = "intermediate_variables_core"
+                extra_name = "extra_intermediate_variables"
+            else:
+                core_rules = self._rules_read_expectations_core
+                core_name = "read_expectations_variables_core"
+                extra_rules = self._rules_extra_read_expectations
+                extra_name = "extra_read_expectations_variables"
+
+            for fcn_name, rules_dict in [(core_name, core_rules)]:
+                if rules_dict:
+                    ignore_vars = list(rules_dict.keys())
+                    this_fcn = {"name": fcn_name}
+                    this_fcn["args"] = ["st"]
+                    this_fcn["body"] = [
+                        f"{var} = {self.rp.process_rule(rule, ignore_vars=ignore_vars)}"
+                        for var, rule in rules_dict.items()
+                    ]
+                    this_fcn["returns"] = list(rules_dict.keys())
+                    this_fcn["return_array"] = False
+                    this_fcn["return_mutate"] = True
+                else:
+                    this_fcn = {"name": fcn_name}
+                    this_fcn["args"] = ["st"]
+                    this_fcn["body"] = []
+                    this_fcn["returns"] = ["st"]
+                    this_fcn["return_array"] = False
+                    this_fcn["return_mutate"] = False
+                functions.append(this_fcn)
 
             this_fcn = {"name": f"{name}"}
             this_fcn["args"] = ["st"]
             this_fcn["body"] = [
-                f"{var} = {self.rp.process_rule(rule, ignore_vars=ignore_vars)}"
-                for var, rule in self.rules[key].items()
+                f"st = {core_name}(st)",
+                f"st = {extra_name}(st)",
             ]
-            this_fcn["returns"] = list(self.rules[key].keys())
+            this_fcn["returns"] = ["st"]
             this_fcn["return_array"] = False
-            this_fcn["return_mutate"] = True
-
+            this_fcn["return_mutate"] = False
             functions.append(this_fcn)
 
             # array version
@@ -2775,7 +3035,27 @@ class Model:
             this_fcn["returns"] = [f"st.{var}" for var in self.rules[key].keys()]
             this_fcn["return_array"] = True
             this_fcn["return_mutate"] = False
+            functions.append(this_fcn)
 
+        for fcn_name, rules_dict in [
+            ("extra_intermediate_variables", self._rules_extra_intermediate),
+            ("extra_read_expectations_variables", self._rules_extra_read_expectations),
+        ]:
+            this_fcn = {"name": fcn_name}
+            this_fcn["args"] = ["st"]
+            if rules_dict:
+                this_fcn["body"] = [
+                    f"{var} = {self.rp.process_rule(rule, ignore_vars=list(rules_dict.keys()))}"
+                    for var, rule in rules_dict.items()
+                ]
+                this_fcn["returns"] = list(rules_dict.keys())
+                this_fcn["return_array"] = False
+                this_fcn["return_mutate"] = True
+            else:
+                this_fcn["body"] = []
+                this_fcn["returns"] = ["st"]
+                this_fcn["return_array"] = False
+                this_fcn["return_mutate"] = False
             functions.append(this_fcn)
 
         cg = CodeGenerator(

@@ -206,11 +206,19 @@ def solve_sequence_linear(
                     raise ValueError(
                         "y_init provided but model has no intermediate variables."
                     )
-                if y_init_regime.shape[0] != Y.shape[1]:
+                n_intermediate = len(
+                    current_mod.var_lists.get("intermediate", [])
+                    if hasattr(current_mod, "var_lists")
+                    else []
+                )
+                if y_init_regime.shape[0] == Y.shape[1]:
+                    Y[0, :] = y_init_regime
+                elif y_init_regime.shape[0] == n_intermediate:
+                    Y[0, :n_intermediate] = y_init_regime
+                else:
                     raise ValueError(
                         "y_init length does not match number of intermediate variables."
                     )
-                Y[0, :] = y_init_regime
 
         # Get variable names from model
         var_names = (
@@ -220,8 +228,8 @@ def solve_sequence_linear(
         )
         exog_names = current_mod.exog_list if hasattr(current_mod, "exog_list") else []
         y_names = (
-            current_mod.var_lists.get("intermediate", [])
-            if hasattr(current_mod, "var_lists") and current_mod.var_lists
+            current_mod.linear_y_names()
+            if hasattr(current_mod, "linear_y_names")
             else []
         )
         model_label = getattr(current_mod, "label", "_default")
@@ -305,38 +313,138 @@ def compute_linear_intermediates(mod, UX, Z, deviations=False):
         If False (default), UX and Z are in levels, and the function returns
         Y in levels. If True, UX and Z are already deviations from steady state,
         and the function returns Y as deviations.
-
     Returns
     -------
     Y : np.ndarray, shape (Nt, N_y) or None
         Linearized intermediate variables at all time points, either in levels
         or deviations depending on the deviations parameter.
         Returns None if model has no intermediate variables.
+
+    Notes
+    -----
+    This function appends linearized read_expectations variables using the
+    chain rule through expectations.
     """
     # Check if model has intermediate variables
     if not hasattr(mod, "var_lists") or not mod.var_lists:
         return None
 
-    y_names = mod.var_lists.get("intermediate", [])
-    if not y_names:
+    inter_vars = mod.var_lists.get("intermediate", [])
+    readexp_vars = mod.var_lists.get("read_expectations", [])
+    if not inter_vars and not readexp_vars:
         return None
 
+    extra_inter = getattr(mod, "_extra_intermediate_vars", [])
+    extra_readexp = getattr(mod, "_extra_read_expectations_vars", [])
+    core_inter = [var for var in inter_vars if var not in extra_inter]
+    core_readexp = [var for var in readexp_vars if var not in extra_readexp]
+
+
     # Check if derivatives are available
-    if not hasattr(mod, "derivatives") or "intermediates" not in mod.derivatives:
+    if not hasattr(mod, "derivatives") or "intermediates_core" not in mod.derivatives:
         logger.warning(
             "Intermediate variable derivatives not found. "
             "Run model.steady_state_derivatives() first."
         )
         return None
 
-    # Get Jacobian matrices for intermediate variables
-    J_u = mod.derivatives["intermediates"].get("u")
-    J_x = mod.derivatives["intermediates"].get("x")
-    J_z = mod.derivatives["intermediates"].get("z")
+    # Get Jacobian matrices for intermediate variables (core + extra)
+    J_u_core = mod.derivatives["intermediates_core"].get("u")
+    J_x_core = mod.derivatives["intermediates_core"].get("x")
+    J_z_core = mod.derivatives["intermediates_core"].get("z")
 
-    if J_u is None or J_x is None or J_z is None:
-        logger.warning("Incomplete Jacobian matrices for intermediate variables.")
-        return None
+    J_u_extra = mod.derivatives["intermediates_extra"].get("u")
+    J_x_extra = mod.derivatives["intermediates_extra"].get("x")
+    J_z_extra = mod.derivatives["intermediates_extra"].get("z")
+
+    if J_u_core is None or J_x_core is None or J_z_core is None:
+        if core_inter:
+            logger.warning("Incomplete Jacobian matrices for core intermediates.")
+            return None
+        J_u_core = np.zeros((0, mod.N["u"]))
+        J_x_core = np.zeros((0, mod.N["x"]))
+        J_z_core = np.zeros((0, mod.N["z"]))
+
+    if J_u_extra is None or J_x_extra is None or J_z_extra is None:
+        if extra_inter:
+            logger.warning("Incomplete Jacobian matrices for extra intermediates.")
+            return None
+        J_u_extra = np.zeros((0, mod.N["u"]))
+        J_x_extra = np.zeros((0, mod.N["x"]))
+        J_z_extra = np.zeros((0, mod.N["z"]))
+
+    J_u = np.vstack((J_u_core, J_u_extra))
+    J_x = np.vstack((J_x_core, J_x_extra))
+    J_z = np.vstack((J_z_core, J_z_extra))
+
+    readexp_linearized = False
+    if readexp_vars:
+        E_u = mod.derivatives["expectations"].get("u")
+        E_x = mod.derivatives["expectations"].get("x")
+        E_z = mod.derivatives["expectations"].get("z")
+        E_u_new = mod.derivatives["expectations"].get("u_new")
+        E_x_new = mod.derivatives["expectations"].get("x_new")
+        E_z_new = mod.derivatives["expectations"].get("z_new")
+
+        R_u_core = mod.derivatives["expectations_variables_core"].get("u")
+        R_x_core = mod.derivatives["expectations_variables_core"].get("x")
+        R_z_core = mod.derivatives["expectations_variables_core"].get("z")
+        R_E_core = mod.derivatives["expectations_variables_core"].get("E")
+
+        R_u_extra = mod.derivatives["expectations_variables_extra"].get("u")
+        R_x_extra = mod.derivatives["expectations_variables_extra"].get("x")
+        R_z_extra = mod.derivatives["expectations_variables_extra"].get("z")
+        R_E_extra = mod.derivatives["expectations_variables_extra"].get("E")
+
+        if None in (
+            E_u,
+            E_x,
+            E_z,
+            E_u_new,
+            E_x_new,
+            E_z_new,
+            R_u_core,
+            R_x_core,
+            R_z_core,
+            R_E_core,
+            R_u_extra,
+            R_x_extra,
+            R_z_extra,
+            R_E_extra,
+        ):
+            logger.warning(
+                "Incomplete Jacobian matrices for read_expectations; "
+                "using zeros for linear responses."
+            )
+            R_u_eff_core = np.zeros((len(core_readexp), mod.N["u"]))
+            R_x_eff_core = np.zeros((len(core_readexp), mod.N["x"]))
+            R_z_eff_core = np.zeros((len(core_readexp), mod.N["z"]))
+            R_u_eff_extra = np.zeros((len(extra_readexp), mod.N["u"]))
+            R_x_eff_extra = np.zeros((len(extra_readexp), mod.N["x"]))
+            R_z_eff_extra = np.zeros((len(extra_readexp), mod.N["z"]))
+            readexp_linearized = True
+        else:
+            G_x = mod.linear_mod.G_x
+            G_z = mod.linear_mod.G_z
+            H_x = mod.linear_mod.H_x
+            H_z = mod.linear_mod.H_z
+            Phi = mod.linear_mod.Phi
+
+            E_x_eff = E_x + E_u_new @ G_x + E_x_new @ H_x
+            E_z_eff = E_z + E_u_new @ G_z + E_x_new @ H_z + E_z_new @ Phi
+
+            R_u_eff_core = R_u_core + R_E_core @ E_u
+            R_x_eff_core = R_x_core + R_E_core @ E_x_eff
+            R_z_eff_core = R_z_core + R_E_core @ E_z_eff
+
+            R_u_eff_extra = R_u_extra + R_E_extra @ E_u
+            R_x_eff_extra = R_x_extra + R_E_extra @ E_x_eff
+            R_z_eff_extra = R_z_extra + R_E_extra @ E_z_eff
+
+            J_u = np.vstack((J_u, R_u_eff_core, R_u_eff_extra))
+            J_x = np.vstack((J_x, R_x_eff_core, R_x_eff_extra))
+            J_z = np.vstack((J_z, R_z_eff_core, R_z_eff_extra))
+            readexp_linearized = True
 
     # Get steady state values
     u_ss = mod.steady_components["u"]
@@ -345,11 +453,35 @@ def compute_linear_intermediates(mod, UX, Z, deviations=False):
 
     # Compute steady state intermediate variables
     params = np.array([mod.params[key] for key in mod.var_lists["params"]])
-    y_ss = mod.intermediates(u_ss, x_ss, z_ss, params)
+    core_inter_ss = (
+        mod.intermediates_core(u_ss, x_ss, z_ss, params)
+        if core_inter
+        else np.zeros((0,))
+    )
+    extra_inter_ss = (
+        mod.intermediates_extra(u_ss, x_ss, z_ss, params)
+        if extra_inter
+        else np.zeros((0,))
+    )
+    y_ss = np.concatenate([np.asarray(core_inter_ss), np.asarray(extra_inter_ss)])
+
+    if readexp_linearized:
+        E_ss = mod.expectations(u_ss, x_ss, z_ss, u_ss, x_ss, z_ss, params)
+        core_readexp_ss = (
+            mod.expectations_variables_core(u_ss, x_ss, z_ss, E_ss, params)
+            if core_readexp
+            else np.zeros((0,))
+        )
+        extra_readexp_ss = (
+            mod.expectations_variables_extra(u_ss, x_ss, z_ss, E_ss, params)
+            if extra_readexp
+            else np.zeros((0,))
+        )
+        y_ss = np.concatenate([y_ss, core_readexp_ss, extra_readexp_ss])
 
     Nt = UX.shape[0]
     N_u = mod.N["u"]
-    N_y = len(y_names)
+    N_y = J_u.shape[0]
     Y = np.zeros((Nt, N_y))
 
     for tt in range(Nt):

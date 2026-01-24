@@ -75,7 +75,7 @@ def compute_time_period(
         z_lag = Z[tt - 1, :]
 
         # Transition equation
-        x_star = mod.fcn("transition", u_lag, x_lag, z_lag, params)
+        x_star = mod.fcn("transition_core", u_lag, x_lag, z_lag, params)
 
     if tt < Nt - 1:
 
@@ -119,7 +119,9 @@ def compute_time_period(
                         -np.hstack(
                             tuple(
                                 # mod.jacobians['transition'][var](u_lag, x_lag, z_lag, params)
-                                mod.d("transition", var, u_lag, x_lag, z_lag, params)
+                                mod.d(
+                                    "transition_core", var, u_lag, x_lag, z_lag, params
+                                )
                                 for var in ["u", "x"]
                             )
                         ),
@@ -153,11 +155,13 @@ def compute_time_period(
 
     else:
 
-        E = mod.fcn("expectations", u_t, x_t, z_t, u_next, x_next, z_next, params)
+        E = mod.fcn(
+            "expectations_core", u_t, x_t, z_t, u_next, x_next, z_next, params
+        )
 
         f_t = np.vstack(
             (
-                mod.fcn("optimality", u_t, x_t, z_t, E, params)[:, np.newaxis],
+                mod.fcn("optimality_core", u_t, x_t, z_t, E, params)[:, np.newaxis],
                 (x_t - x_star)[:, np.newaxis],
             )
         )
@@ -165,7 +169,7 @@ def compute_time_period(
         if compute_grad:
 
             # d_opt_d_E = mod.jacobians['optimality']['E'](u_t, x_t, z_t, E, params)
-            d_opt_d_E = mod.d("optimality", "E", u_t, x_t, z_t, E, params)
+            d_opt_d_E = mod.d("optimality_core", "E", u_t, x_t, z_t, E, params)
 
             L_t = np.vstack(
                 (
@@ -173,7 +177,9 @@ def compute_time_period(
                     -np.hstack(
                         tuple(
                             # mod.jacobians['transition'][var](u_lag, x_lag, z_lag, params)
-                            mod.d("transition", var, u_lag, x_lag, z_lag, params)
+                            mod.d(
+                                "transition_core", var, u_lag, x_lag, z_lag, params
+                            )
                             for var in ["u", "x"]
                         )
                     ),
@@ -185,11 +191,11 @@ def compute_time_period(
                     np.hstack(
                         tuple(
                             # mod.jacobians['optimality'][var](u_t, x_t, z_t, E, params)
-                            mod.d("optimality", var, u_t, x_t, z_t, E, params)
+                            mod.d("optimality_core", var, u_t, x_t, z_t, E, params)
                             + d_opt_d_E @
                             # mod.jacobians['expectations'][var](u_t, x_t, z_t, u_next, x_next, z_next, params)
                             mod.d(
-                                "expectations",
+                                "expectations_core",
                                 var,
                                 u_t,
                                 x_t,
@@ -218,7 +224,7 @@ def compute_time_period(
                             d_opt_d_E @
                             # mod.jacobians['expectations'][var + '_new'](u_t, x_t, z_t, u_next, x_next, z_next, params)
                             mod.d(
-                                "expectations",
+                                "expectations_core",
                                 var + "_new",
                                 u_t,
                                 x_t,
@@ -567,19 +573,29 @@ def solve(
     exog_names = mod.exog_list if hasattr(mod, "exog_list") else []
     model_label = getattr(mod, "label", "_default")
 
-    # Compute intermediate variables using mod.intermediates()
-    y_names = mod.var_lists.get("intermediate", []) if hasattr(mod, "var_lists") else []
-    Y = _compute_intermediate_variables(mod, UX, Z)
+    # Compute intermediate and read_expectations variables
+    y_names = (
+        mod.linear_y_names() if hasattr(mod, "linear_y_names") else []
+    )
+    Y = _compute_full_variables(mod, UX, Z)
 
     if y_init is not None:
         if Y is None:
             raise ValueError("y_init provided but model has no intermediate variables.")
         y_init = np.asarray(y_init)
-        if y_init.shape[0] != Y.shape[1]:
+        n_intermediate = (
+            len(mod.var_lists.get("intermediate", []))
+            if hasattr(mod, "var_lists") and mod.var_lists
+            else 0
+        )
+        if y_init.shape[0] == Y.shape[1]:
+            Y[0, :] = y_init
+        elif y_init.shape[0] == n_intermediate:
+            Y[0, :n_intermediate] = y_init
+        else:
             raise ValueError(
                 "y_init length does not match number of intermediate variables."
             )
-        Y[0, :] = y_init
 
     result = DeterministicResult(
         UX=UX,
@@ -600,14 +616,14 @@ def solve(
     return result
 
 
-def _compute_intermediate_variables(mod, UX, Z):
+def _compute_full_variables(mod, UX, Z):
     """
-    Compute intermediate variables for all time periods.
+    Compute intermediate and read_expectations variables for all time periods.
 
     Parameters
     ----------
     mod : Model
-        The model instance with intermediates() method.
+        The model instance with core/extra intermediate and read_expectations helpers.
     UX : np.ndarray, shape (Nt, N_ux)
         Control and state variables at all time points.
     Z : np.ndarray, shape (Nt, N_z)
@@ -616,32 +632,76 @@ def _compute_intermediate_variables(mod, UX, Z):
     Returns
     -------
     Y : np.ndarray, shape (Nt, N_y)
-        Intermediate variables at all time points.
+        Variables at all time points ordered as:
+        core_intermediate, extra_intermediate, core_read_expectations, extra_read_expectations.
     """
-    if not hasattr(mod, "intermediates"):
+    if not hasattr(mod, "linear_y_names"):
         return None
 
     if not hasattr(mod, "var_lists") or not mod.var_lists:
         return None
 
-    y_names = mod.var_lists.get("intermediate", [])
+    y_names = mod.linear_y_names()
     if not y_names:
         return None
 
     Nt = UX.shape[0]
     N_y = len(y_names)
-    Y = np.zeros((Nt, N_y))
+    Y = np.full((Nt, N_y), np.nan)
 
     # Get parameters array
     params = np.array([mod.params[key] for key in mod.var_lists["params"]])
+
+    n_core_inter = len(getattr(mod, "_core_intermediate_vars", []))
+    n_extra_inter = len(getattr(mod, "_extra_intermediate_vars", []))
+    n_core_read = len(getattr(mod, "_core_read_expectations_vars", []))
+    n_extra_read = len(getattr(mod, "_extra_read_expectations_vars", []))
+    n_inter = n_core_inter + n_extra_inter
 
     for tt in range(Nt):
         u_t, x_t = np.split(UX[tt, :], np.array((mod.N["u"],)))
         z_t = Z[tt, :]
 
-        # Call mod.intermediates to get intermediate values for this time period
-        y_t = mod.intermediates(u_t, x_t, z_t, params)
-        Y[tt, :] = np.asarray(y_t)
+        core_inter = (
+            mod.intermediates_core(u_t, x_t, z_t, params)
+            if n_core_inter
+            else np.zeros((0,))
+        )
+        extra_inter = (
+            mod.intermediates_extra(u_t, x_t, z_t, params)
+            if n_extra_inter
+            else np.zeros((0,))
+        )
+
+        row = [np.asarray(core_inter), np.asarray(extra_inter)]
+
+        if tt < Nt - 1 and (n_core_read or n_extra_read):
+            u_next, x_next = np.split(UX[tt + 1, :], np.array((mod.N["u"],)))
+            z_next = Z[tt + 1, :]
+            E_t = mod.expectations_core(
+                u_t, x_t, z_t, u_next, x_next, z_next, params
+            )
+            core_read = (
+                mod.expectations_variables_core(u_t, x_t, z_t, E_t, params)
+                if n_core_read
+                else np.zeros((0,))
+            )
+            extra_read = (
+                mod.expectations_variables_extra(u_t, x_t, z_t, E_t, params)
+                if n_extra_read
+                else np.zeros((0,))
+            )
+            row.extend([np.asarray(core_read), np.asarray(extra_read)])
+        else:
+            # Last period or no read_expectations: fill with NaNs for read_expectations
+            row.extend(
+                [
+                    np.full((n_core_read,), np.nan),
+                    np.full((n_extra_read,), np.nan),
+                ]
+            )
+
+        Y[tt, :] = np.concatenate(row)
 
     return Y
 
@@ -664,17 +724,26 @@ def _compute_initial_intermediates(mod, ux_init, z_init):
     y_init : np.ndarray or None
         Intermediate variables at the initial period, or None if unavailable.
     """
-    if not hasattr(mod, "intermediates"):
+    if not hasattr(mod, "linear_y_names"):
         return None
     if not hasattr(mod, "var_lists") or not mod.var_lists:
         return None
-    y_names = mod.var_lists.get("intermediate", [])
-    if not y_names:
+    if not mod.linear_y_names():
         return None
 
     u_init, x_init = np.split(ux_init, np.array((mod.N["u"],)))
     params = np.array([mod.params[key] for key in mod.var_lists["params"]])
-    return mod.intermediates(u_init, x_init, z_init, params)
+    core_inter = (
+        mod.intermediates_core(u_init, x_init, z_init, params)
+        if getattr(mod, "_core_intermediate_vars", [])
+        else np.zeros((0,))
+    )
+    extra_inter = (
+        mod.intermediates_extra(u_init, x_init, z_init, params)
+        if getattr(mod, "_extra_intermediate_vars", [])
+        else np.zeros((0,))
+    )
+    return np.concatenate([np.asarray(core_inter), np.asarray(extra_inter)])
 
 
 def _solve_lbj_internal(
