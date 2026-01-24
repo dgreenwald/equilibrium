@@ -30,6 +30,34 @@ class State(NamedTuple):
     def __getitem__(self, key):
         return getattr(self, key)
 
+# Define constants for pytree registration
+_CORE_VARS = {{ core_vars }}
+_DERIVED_VARS = {{ derived_vars }}
+_NUM_CORE = {{ core_vars|length }}
+_NUM_DERIVED = {{ derived_vars|length }}
+
+def _flatten_state(state):
+    """Flatten State into pytree children and auxiliary data."""
+    children = tuple(getattr(state, var) for var in _CORE_VARS)
+    aux_data = {
+        'num_core': _NUM_CORE,
+        'num_derived': _NUM_DERIVED,
+    }
+    return (children, aux_data)
+
+def _unflatten_state(aux_data, children):
+    """Reconstruct State from pytree children and auxiliary data."""
+    template = children[0]
+    nans = tuple(np.full_like(template, np.nan) for _ in range(aux_data['num_derived']))
+    return State(*children, *nans)
+
+# Register State as JAX pytree
+jax.tree_util.register_pytree_node(
+    State,
+    _flatten_state,
+    _unflatten_state
+)
+
 def _upd(st: State, **kw):
     """Pure functional update: returns a new State with fields replaced."""
     return st._replace(**kw)
@@ -46,6 +74,14 @@ def array_to_state(x):
         {{ var }}=nan,
 {% endfor %}
     )
+
+def state_to_array(st):
+    """Convert State to flat array containing only core variables."""
+    return np.array([
+{% for var in core_vars %}
+        st.{{ var }},
+{% endfor %}
+    ])
 
 {% for fn in funcs %}
 {% if jit %}

@@ -170,5 +170,96 @@ def test_step_by_step_compilation():
     print("=" * 70)
 
 
+def test_pytree_integration_workflow():
+    """Test full model workflow with pytree-registered State."""
+    print("\n" + "=" * 70)
+    print("PYTREE INTEGRATION TEST")
+    print("=" * 70)
+
+    mod = set_model()
+    mod.solve_steady(calibrate=True)
+    mod.linearize()
+
+    # Verify pytree registration
+    print("\n1. Testing pytree registration...")
+    st = mod.array_to_state()
+    leaves, treedef = jax.tree_util.tree_flatten(st)
+
+    assert len(leaves) == len(mod.core_vars), \
+        f"Expected {len(mod.core_vars)} leaves, got {len(leaves)}"
+    print(f"   ✓ State properly registered as pytree")
+    print(f"   ✓ Found {len(leaves)} pytree leaves (core vars)")
+
+    # Verify unflatten reconstructs core vars
+    print("\n2. Testing unflatten reconstruction...")
+    st_reconstructed = jax.tree_util.tree_unflatten(treedef, leaves)
+
+    for var in mod.core_vars:
+        np.testing.assert_allclose(
+            getattr(st, var),
+            getattr(st_reconstructed, var),
+            err_msg=f"Core var {var} mismatch"
+        )
+    print(f"   ✓ All {len(mod.core_vars)} core variables reconstructed correctly")
+
+    # Verify derived vars are NaN after unflatten
+    print("\n3. Testing derived var behavior...")
+    for var in mod.derived_vars:
+        assert np.isnan(getattr(st_reconstructed, var)), \
+            f"Derived var {var} should be NaN"
+    print(f"   ✓ All {len(mod.derived_vars)} derived vars correctly set to NaN")
+
+    # Verify tree_map operations
+    print("\n4. Testing tree_map operations...")
+    st_scaled = jax.tree.map(lambda x: x * 2.0, st)
+
+    for var in mod.core_vars:
+        np.testing.assert_allclose(
+            getattr(st_scaled, var),
+            getattr(st, var) * 2.0,
+            err_msg=f"Core var {var} not scaled correctly"
+        )
+    print(f"   ✓ tree_map scaling works correctly")
+
+    # Verify state_to_array is inverse of array_to_state
+    print("\n5. Testing array conversion roundtrip...")
+    arr = mod.get_s_steady()
+    st_from_arr = mod.inner_functions.array_to_state(arr)
+    arr_reconstructed = mod.inner_functions.state_to_array(st_from_arr)
+
+    np.testing.assert_allclose(
+        arr,
+        arr_reconstructed,
+        err_msg="state_to_array should be inverse of array_to_state"
+    )
+    print(f"   ✓ Array conversion roundtrip successful")
+
+    # Verify backward compatibility
+    print("\n6. Testing backward compatibility...")
+    new_val = getattr(st, mod.core_vars[0]) * 3.0
+    st_updated = st._replace(**{mod.core_vars[0]: new_val})
+
+    np.testing.assert_allclose(
+        getattr(st_updated, mod.core_vars[0]),
+        new_val,
+        err_msg="_replace should work after pytree registration"
+    )
+    print(f"   ✓ _replace() still works correctly")
+
+    # Verify __getitem__ still works
+    for var in mod.core_vars[:3]:  # Test a few
+        np.testing.assert_allclose(
+            st[var],
+            getattr(st, var),
+            err_msg=f"__getitem__ for {var} should match attribute access"
+        )
+    print(f"   ✓ __getitem__() still works correctly")
+
+    print("\n" + "=" * 70)
+    print("PYTREE INTEGRATION TEST PASSED")
+    print("=" * 70)
+
+
 if __name__ == "__main__":
     test_step_by_step_compilation()
+    test_pytree_integration_workflow()

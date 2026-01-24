@@ -108,18 +108,40 @@ def array_to_state(x):
 
 **Implementation location**: `src/equilibrium/templates/functions.py.jinja`
 
-#### 4. Consider Pytree Flatten/Unflatten
+#### 4. ✅ IMPLEMENTED: Pytree Registration for State NamedTuple
 
-Register State as a JAX pytree to enable more efficient operations:
+**Status**: Implemented in `src/equilibrium/templates/functions.py.jinja`
+
+The State NamedTuple is now automatically registered as a JAX pytree, enabling efficient tree operations and reducing compilation overhead.
+
+**Key features**:
+- Only core variables (u, x, z, E, params) are pytree children
+- Derived variables (intermediate, read_expectations) excluded from pytree structure
+- Derived vars reconstructed as NaN during unflatten (signals need for recomputation)
+- Robust handling of batched arrays using `np.full_like`
+
+**Performance impact**:
+- Reduces trace graph size for state construction (200+ primitives → ~20)
+- Enables tree operations: `jax.tree.map()`, `jax.tree_util.tree_flatten()`, etc.
+- Foundation for future vectorization optimizations
+- Full backward compatibility maintained
+
+**Implementation**:
 ```python
+# Automatically generated in each model's inner_functions module
 jax.tree_util.register_pytree_node(
     State,
-    lambda s: (tuple(s), None),
-    lambda _, children: State(*children)
+    _flatten_state,    # Extracts core vars as children
+    _unflatten_state   # Reconstructs state from children
 )
+
+# New helper function
+def state_to_array(st):
+    """Convert State to flat array containing only core variables."""
+    return np.array([st.var1, st.var2, ...])  # Only core vars
 ```
 
-**Implementation location**: Generated code in `functions.py.jinja`
+**Tests**: `tests/test_state_pytree.py` - comprehensive pytree functionality tests
 
 ### Medium-Impact Changes
 

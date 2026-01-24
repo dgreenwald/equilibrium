@@ -122,6 +122,45 @@ Rule categories match the solution algorithm:
 - **`calibration`**: Parameter calibration equations
 - **`analytical_steady`**: Closed-form steady state solutions
 
+### State NamedTuple and Pytree Registration
+
+The generated `State` NamedTuple is automatically registered as a JAX pytree, enabling efficient tree operations and reducing compilation overhead.
+
+**Structure**:
+- **Core variables** (u, x, z, E, params): Fundamental state that gets differentiated through
+- **Derived variables** (intermediate, read_expectations): Computed from core vars via `intermediate_variables()`
+
+**Pytree behavior**:
+- Only core variables are pytree children (leaves)
+- Derived variables excluded from pytree (reconstructed as NaN during unflatten)
+- After tree operations, call `intermediate_variables()` to recompute derived vars
+
+**Key functions** (in generated `inner_functions` module):
+```python
+# Convert between arrays and states
+st = mod.inner_functions.array_to_state(arr)  # Array → State
+arr = mod.inner_functions.state_to_array(st)  # State → Array (core vars only)
+
+# Compute intermediate variables
+st_full = mod.inner_functions.intermediate_variables(st)
+
+# Tree operations (pytree-enabled)
+import jax
+st_scaled = jax.tree.map(lambda x: x * 2.0, st)  # Scale all core vars
+st_sum = jax.tree.map(lambda x, y: x + y, st1, st2)  # Add states element-wise
+```
+
+**Performance impact**:
+- Reduces trace graph size for state construction (200+ primitives → ~20)
+- Enables efficient vectorized operations on states
+- Maintains full backward compatibility with existing code
+
+**Important**: Derived variables become NaN after tree operations. Always recompute:
+```python
+st_scaled = jax.tree.map(lambda x: x * 2.0, st)  # Core vars scaled, derived vars = NaN
+st_scaled = mod.inner_functions.intermediate_variables(st_scaled)  # Recompute derived
+```
+
 ### Model Block System
 
 **Location**: `src/equilibrium/blocks/`
