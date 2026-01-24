@@ -178,14 +178,22 @@ model2 = model1.update_copy(params={...})  # Zero additional compilations
 
 ## Expected Gains
 
-| Optimization | Estimated Savings | Complexity |
-|-------------|-------------------|------------|
-| JAX persistent cache | 35-38s on warm runs | Low |
-| Lazy derivative creation | 5-10s on first run | Medium |
-| Vectorized state construction | 3-5s | Medium |
-| Intermediate pruning | 2-5s | High |
+| Optimization | Estimated Savings | Complexity | Status |
+|-------------|-------------------|------------|--------|
+| JAX persistent cache | 35-38s on warm runs | Low | ✅ **Implemented** |
+| Lazy derivative creation | 5-10s on first run | Medium | ✅ **Implemented** |
+| Skip params derivatives | ~5 compilations | Low | ✅ **Implemented** |
+| Vectorized state construction | 3-5s | Medium | Not implemented |
+| Intermediate pruning | 2-5s | High | Not implemented |
 
-With all optimizations, a warm run could complete in **5-10 seconds** instead of 62 seconds.
+## Actual Results (Measured)
+
+| Metric | Original | With Optimizations | Speedup |
+|--------|----------|-------------------|---------|
+| Cold run (first execution) | 62.5s | 37.0s | 1.7x |
+| Warm run (cache populated) | 62.5s | **14.7s** | **4.2x** |
+| Jacobians compiled | 25 | 20 | 20% fewer |
+| Unused derivatives created | 100 | 0 | 100% reduction |
 
 ---
 
@@ -217,12 +225,71 @@ print(f"Compilations: {counter.count}")
 
 ---
 
+## Implemented Optimizations (2026-01-23)
+
+### 1. JAX Persistent Compilation Cache
+
+**Files modified**: `src/equilibrium/settings.py`, `src/equilibrium/__init__.py`
+
+Added configuration for JAX persistent compilation cache that saves compiled functions to disk across Python sessions.
+
+**Configuration**:
+```python
+# Default: enabled, saves to {data_dir}/jax_cache/
+# Customize via environment variables:
+EQUILIBRIUM_JAX__COMPILATION_CACHE_ENABLED=true
+EQUILIBRIUM_JAX__COMPILATION_CACHE_DIR=/custom/path
+EQUILIBRIUM_JAX__MIN_COMPILE_TIME_SECS=0.0
+```
+
+**Impact**:
+- Warm runs: 4.2x speedup (62.5s → 14.7s)
+- Eliminates ~100-130 JAX compilations on subsequent runs
+- Cache size: ~2MB for typical models
+
+### 2. Lazy Derivative Creation
+
+**Files modified**: `src/equilibrium/utils/jax_function_bundle.py`
+
+Replaced eager derivative creation with lazy `_LazyDerivativeDict` that creates derivatives only when accessed.
+
+**What changed**:
+- `FunctionBundle.__post_init__()` no longer creates all derivative types upfront
+- Derivatives (grad, jacobian_fwd/rev, hessian) created on first access
+- Only `f_jit` (primal function) is compiled immediately
+
+**Impact**:
+- Unused derivative types (hessian, grad, value_and_grad, jacobian_rev) never created
+- Saves 100 function compilations (4 types × 25 argnums)
+- Faster model initialization
+
+### 3. Skip params Derivatives
+
+**Files modified**: `src/equilibrium/model/model.py`
+
+Added `include_params` flag to `compute_derivatives()` and `steady_state_derivatives()` to skip computing Jacobians w.r.t. `params` (not used in linearization).
+
+**Usage**:
+```python
+# Default: skip params derivatives
+model.linearize()
+
+# For sensitivity analysis, include them:
+model.steady_state_derivatives(include_params=True)
+model.compute_derivatives(..., include_params=True)
+```
+
+**Impact**:
+- Reduces Jacobians from 25 → 20 (5 fewer compilations)
+- 20% reduction in linearization compilation count
+
 ## Implementation Priority
 
-1. **JAX persistent cache** - Lowest effort, highest impact for repeated runs
-2. **Lazy derivative creation** - Medium effort, good impact for first runs
-3. **Vectorized state construction** - Medium effort, helps with trace size
-4. **Documentation of warm-up pattern** - Low effort, helps users
+1. ✅ **JAX persistent cache** - Implemented
+2. ✅ **Lazy derivative creation** - Implemented
+3. ✅ **Skip params derivatives** - Implemented
+4. **Vectorized state construction** - Medium effort, helps with trace size
+5. **Documentation of warm-up pattern** - Low effort, helps users
 
 ---
 

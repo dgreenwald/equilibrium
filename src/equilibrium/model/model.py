@@ -2148,7 +2148,30 @@ class Model:
             for key, value in serializable.items()
         }
 
-    def compute_derivatives(self, u, x, z, u_new, x_new, z_new, params, E=None):
+    def compute_derivatives(self, u, x, z, u_new, x_new, z_new, params, E=None, include_params=False):
+        """
+        Compute derivatives of model functions.
+
+        Parameters
+        ----------
+        u, x, z : array_like
+            Current period state variables
+        u_new, x_new, z_new : array_like
+            Next period state variables
+        params : array_like
+            Model parameters
+        E : array_like, optional
+            Expectation variables. If None, computed automatically.
+        include_params : bool, default False
+            Whether to compute derivatives with respect to params.
+            Set to True for sensitivity analysis or parameter calibration.
+            Linearization does not require params derivatives.
+
+        Returns
+        -------
+        None
+            Derivatives stored in self.derivatives
+        """
 
         if E is None:
             E = self.fcn("expectations", u, x, z, u_new, x_new, z_new, params)
@@ -2166,11 +2189,23 @@ class Model:
             self.derivatives[key] = {}
             these_args = arg_dict[key]
             for var in arg_list:
+                # Skip params derivatives unless explicitly requested
+                if var == "params" and not include_params:
+                    continue
                 self.derivatives[key][var] = self.d(key, var, *these_args)
 
         return None
 
-    def steady_state_derivatives(self):
+    def steady_state_derivatives(self, include_params=False):
+        """
+        Compute derivatives at the steady state.
+
+        Parameters
+        ----------
+        include_params : bool, default False
+            Whether to compute derivatives with respect to params.
+            Not needed for linearization.
+        """
 
         init_vals = self.initialize_values(self.steady_dict)
         u, x, z, params = (
@@ -2179,7 +2214,7 @@ class Model:
             init_vals["z"],
             init_vals["params"],
         )
-        self.compute_derivatives(u, x, z, u, x, z, params)
+        self.compute_derivatives(u, x, z, u, x, z, params, include_params=include_params)
 
     def get_s_steady(self):
 
