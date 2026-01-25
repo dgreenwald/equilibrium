@@ -215,6 +215,35 @@ class FunctionBundle:
             )
         return self.jacobian_rev_multi_jit[argnums]
 
+    def compute_all_derivatives(self, *args):
+        """
+        Compute joint derivative for all argnums.
+
+        This is a convenience wrapper around jacobian_fwd_multi() that
+        returns both the jacobian tuple and the argnums list, making it
+        easy to construct a DerivativeResult container.
+
+        Parameters
+        ----------
+        *args : tuple
+            Arguments to pass to the differentiated function
+
+        Returns
+        -------
+        jac_tuple : tuple of jax.Array
+            Tuple of Jacobian matrices
+        argnums_list : list of int
+            List of argument numbers that were differentiated
+
+        Examples
+        --------
+        >>> bundle = FunctionBundle(my_func, argnums=[0, 1, 2])
+        >>> jac_tuple, argnums = bundle.compute_all_derivatives(x, y, z)
+        >>> # jac_tuple has 3 elements (derivatives w.r.t. args 0, 1, 2)
+        """
+        jac_tuple = self.jacobian_fwd_multi()(*args)
+        return jac_tuple, self._argnums_list
+
 
 # Example usage
 if __name__ == "__main__":

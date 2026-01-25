@@ -113,16 +113,12 @@ def compute_time_period(
 
             if compute_grad:
 
+                trans_derivs = mod.d_all("transition", u_lag, x_lag, z_lag, params)
+
                 L_t = np.vstack(
                     (
                         np.zeros((mod.N["u"], N_ux)),
-                        -np.hstack(
-                            tuple(
-                                # mod.jacobians['transition'][var](u_lag, x_lag, z_lag, params)
-                                mod.d("transition", var, u_lag, x_lag, z_lag, params)
-                                for var in ["u", "x"]
-                            )
-                        ),
+                        -trans_derivs.as_hstack(["u", "x"]),
                     )
                 )
 
@@ -167,41 +163,24 @@ def compute_time_period(
             # d_opt_d_E = mod.jacobians['optimality']['E'](u_t, x_t, z_t, E, params)
             d_opt_d_E = mod.d("optimality", "E", u_t, x_t, z_t, E, params)
 
+            trans_derivs = mod.d_all("transition", u_lag, x_lag, z_lag, params)
+
             L_t = np.vstack(
                 (
                     np.zeros((mod.N["u"], N_ux)),
-                    -np.hstack(
-                        tuple(
-                            # mod.jacobians['transition'][var](u_lag, x_lag, z_lag, params)
-                            mod.d("transition", var, u_lag, x_lag, z_lag, params)
-                            for var in ["u", "x"]
-                        )
-                    ),
+                    -trans_derivs.as_hstack(["u", "x"]),
                 )
             )
 
+            opt_derivs = mod.d_all("optimality", u_t, x_t, z_t, E, params)
+            exp_derivs = mod.d_all("expectations", u_t, x_t, z_t, u_next, x_next, z_next, params)
+
             C_t = np.vstack(
                 (
-                    np.hstack(
-                        tuple(
-                            # mod.jacobians['optimality'][var](u_t, x_t, z_t, E, params)
-                            mod.d("optimality", var, u_t, x_t, z_t, E, params)
-                            + d_opt_d_E @
-                            # mod.jacobians['expectations'][var](u_t, x_t, z_t, u_next, x_next, z_next, params)
-                            mod.d(
-                                "expectations",
-                                var,
-                                u_t,
-                                x_t,
-                                z_t,
-                                u_next,
-                                x_next,
-                                z_next,
-                                params,
-                            )
-                            for var in ["u", "x"]
-                        )
-                    ),
+                    np.hstack([
+                        opt_derivs["u"] + d_opt_d_E @ exp_derivs["u"],
+                        opt_derivs["x"] + d_opt_d_E @ exp_derivs["x"],
+                    ]),
                     np.hstack(
                         (
                             np.zeros((mod.N["x"], mod.N["u"])),
@@ -213,24 +192,10 @@ def compute_time_period(
 
             F_t = np.vstack(
                 (
-                    np.hstack(
-                        tuple(
-                            d_opt_d_E @
-                            # mod.jacobians['expectations'][var + '_new'](u_t, x_t, z_t, u_next, x_next, z_next, params)
-                            mod.d(
-                                "expectations",
-                                var + "_new",
-                                u_t,
-                                x_t,
-                                z_t,
-                                u_next,
-                                x_next,
-                                z_next,
-                                params,
-                            )
-                            for var in ["u", "x"]
-                        )
-                    ),
+                    np.hstack([
+                        d_opt_d_E @ exp_derivs["u_new"],
+                        d_opt_d_E @ exp_derivs["x_new"],
+                    ]),
                     np.zeros((mod.N["x"], N_ux)),
                 )
             )
