@@ -112,6 +112,8 @@ class FunctionBundle:
     jacobian_fwd_jit: _LazyDerivativeDict = field(init=False)
     jacobian_rev_jit: _LazyDerivativeDict = field(init=False)
     hessian_jit: _LazyDerivativeDict = field(init=False)
+    jacobian_fwd_multi_jit: Dict[Tuple[int, ...], Callable] = field(init=False)
+    jacobian_rev_multi_jit: Dict[Tuple[int, ...], Callable] = field(init=False)
 
     def __post_init__(self):
         # Primal function is always needed, compile immediately
@@ -140,6 +142,8 @@ class FunctionBundle:
         self.hessian_jit = _LazyDerivativeDict(
             self._make_hessian, self._argnums_list
         )
+        self.jacobian_fwd_multi_jit = {}
+        self.jacobian_rev_multi_jit = {}
 
     def _jit(self, fn: Callable) -> Callable:
         return jax.jit(
@@ -188,6 +192,28 @@ class FunctionBundle:
         if argnum is None:
             argnum = self._argnums_list[0]
         return self.jacobian_rev_jit[argnum]
+
+    def jacobian_fwd_multi(self, argnums: Optional[Tuple[int, ...]] = None) -> Callable:
+        """Get a forward-mode jacobian over multiple argnums, returning a tuple of Jacobians."""
+        if argnums is None:
+            argnums = tuple(self._argnums_list)
+        argnums = tuple(argnums)
+        if argnums not in self.jacobian_fwd_multi_jit:
+            self.jacobian_fwd_multi_jit[argnums] = self._jit(
+                jax.jacfwd(self.f, argnums=argnums)
+            )
+        return self.jacobian_fwd_multi_jit[argnums]
+
+    def jacobian_rev_multi(self, argnums: Optional[Tuple[int, ...]] = None) -> Callable:
+        """Get a reverse-mode jacobian over multiple argnums, returning a tuple of Jacobians."""
+        if argnums is None:
+            argnums = tuple(self._argnums_list)
+        argnums = tuple(argnums)
+        if argnums not in self.jacobian_rev_multi_jit:
+            self.jacobian_rev_multi_jit[argnums] = self._jit(
+                jax.jacrev(self.f, argnums=argnums)
+            )
+        return self.jacobian_rev_multi_jit[argnums]
 
 
 # Example usage

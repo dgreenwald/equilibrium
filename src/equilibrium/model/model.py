@@ -976,7 +976,8 @@ class Model:
         bundle_info = self._shared_function_bundles[name]
         bundle = bundle_info["bundle"]
         argnum = bundle_info["var_to_argnum"][wrt]
-        return bundle.jacobian_fwd_jit[argnum](*std_args)
+        jac_tuple = bundle.jacobian_fwd_multi()(*std_args)
+        return jac_tuple[argnum]
 
     def d_wrt_multi(self, name, wrt_list, args):
 
@@ -984,9 +985,9 @@ class Model:
         bundle = bundle_info["bundle"]
         var_to_argnum = bundle_info["var_to_argnum"]
 
-        return jnp.hstack(
-            [bundle.jacobian_fwd_jit[var_to_argnum[wrt]](*args) for wrt in wrt_list]
-        )
+        argnums = tuple(var_to_argnum[wrt] for wrt in wrt_list)
+        jac_tuple = bundle.jacobian_fwd_multi(argnums)(*args)
+        return jnp.hstack(jac_tuple)
 
     def update_copy(
         self,
@@ -2188,11 +2189,18 @@ class Model:
         for key, arg_list in self.arg_lists.items():
             self.derivatives[key] = {}
             these_args = arg_dict[key]
-            for var in arg_list:
-                # Skip params derivatives unless explicitly requested
-                if var == "params" and not include_params:
-                    continue
-                self.derivatives[key][var] = self.d(key, var, *these_args)
+            bundle_info = self._shared_function_bundles[key]
+            bundle = bundle_info["bundle"]
+            var_to_argnum = bundle_info["var_to_argnum"]
+            included_vars = [
+                var
+                for var in arg_list
+                if not (var == "params" and not include_params)
+            ]
+            argnums = tuple(var_to_argnum[var] for var in included_vars)
+            jac_tuple = bundle.jacobian_fwd_multi(argnums)(*these_args)
+            for idx, var in enumerate(included_vars):
+                self.derivatives[key][var] = jac_tuple[idx]
 
         return None
 
