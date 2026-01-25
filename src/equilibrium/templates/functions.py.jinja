@@ -63,17 +63,23 @@ def _upd(st: State, **kw):
     return st._replace(**kw)
 
 def array_to_state(x):
-    """Initialize State from array x"""
-    {#dtype = x.dtype#}
-    nan = np.nan * x[0]
-    return State(
-{% for var in core_vars %}
-        {{ var }}=x[{{ loop.index0 }}],
-{% endfor %}
-{% for var in derived_vars %}
-        {{ var }}=nan,
-{% endfor %}
-    )
+    """Initialize State from array x using vectorized split."""
+    # Split array once instead of 200+ scalar extractions
+    # This reduces JAX primitive operations from ~200 to ~1
+{% if core_split_indices %}
+    # Split and squeeze to maintain scalar shapes (not 1D arrays)
+    core_slices = tuple(np.squeeze(s) for s in np.split(x, {{ core_split_indices }}))
+{% else %}
+    # Edge case: 0 or 1 core variables
+    core_slices = (x,) if _NUM_CORE == 1 else ()
+{% endif %}
+
+    # Fill derived variables with NaN (will be recomputed via intermediate_variables)
+    # Create NaN scalar matching the first element's shape
+    template_nan = np.full_like(x[0], np.nan) if x.size > 0 else np.array(np.nan)
+    derived_nans = tuple(template_nan for _ in range(_NUM_DERIVED))
+
+    return State(*core_slices, *derived_nans)
 
 def state_to_array(st):
     """Convert State to flat array containing only core variables."""

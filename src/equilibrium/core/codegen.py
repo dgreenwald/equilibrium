@@ -69,10 +69,23 @@ def _render_code(functions, core_vars, derived_vars, jit=True):
     str
         Formatted Python source code.
     """
+    # Compute split indices for vectorized state construction
+    # jnp.split(x, indices) splits at positions, not lengths
+    # For n_core vars, split at [1, 2, ..., n_core-1] to get n_core slices
+    # Handle edge case of 0 or 1 core variables
+    if len(core_vars) <= 1:
+        core_split_indices = []
+    else:
+        core_split_indices = list(range(1, len(core_vars)))
+
     env = get_env()
     tmpl = env.get_template("functions.py.jinja")
     code = tmpl.render(
-        funcs=functions, core_vars=core_vars, derived_vars=derived_vars, jit=jit
+        funcs=functions,
+        core_vars=core_vars,
+        derived_vars=derived_vars,
+        jit=jit,
+        core_split_indices=core_split_indices,
     )
     return format_str(code, mode=FileMode())
 
