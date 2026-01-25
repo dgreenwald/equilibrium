@@ -173,14 +173,18 @@ def compute_time_period(
             )
 
             opt_derivs = mod.d_all("optimality", u_t, x_t, z_t, E, params)
-            exp_derivs = mod.d_all("expectations", u_t, x_t, z_t, u_next, x_next, z_next, params)
+            exp_derivs = mod.d_all(
+                "expectations", u_t, x_t, z_t, u_next, x_next, z_next, params
+            )
 
             C_t = np.vstack(
                 (
-                    np.hstack([
-                        opt_derivs["u"] + d_opt_d_E @ exp_derivs["u"],
-                        opt_derivs["x"] + d_opt_d_E @ exp_derivs["x"],
-                    ]),
+                    np.hstack(
+                        [
+                            opt_derivs["u"] + d_opt_d_E @ exp_derivs["u"],
+                            opt_derivs["x"] + d_opt_d_E @ exp_derivs["x"],
+                        ]
+                    ),
                     np.hstack(
                         (
                             np.zeros((mod.N["x"], mod.N["u"])),
@@ -192,10 +196,12 @@ def compute_time_period(
 
             F_t = np.vstack(
                 (
-                    np.hstack([
-                        d_opt_d_E @ exp_derivs["u_new"],
-                        d_opt_d_E @ exp_derivs["x_new"],
-                    ]),
+                    np.hstack(
+                        [
+                            d_opt_d_E @ exp_derivs["u_new"],
+                            d_opt_d_E @ exp_derivs["x_new"],
+                        ]
+                    ),
                     np.zeros((mod.N["x"], N_ux)),
                 )
             )

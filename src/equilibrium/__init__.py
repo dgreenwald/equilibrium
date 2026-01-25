@@ -11,31 +11,31 @@ from .settings import get_settings as _get_settings
 
 _get_settings()
 
-from . import blocks
-from .io import load_results, resolve_output_path, save_results
-from .model import LinearModel, Model
-from .plot.plot import (
+from . import blocks  # noqa: E402
+from .io import load_results, resolve_output_path, save_results  # noqa: E402
+from .model import LinearModel, Model  # noqa: E402
+from .plot.plot import (  # noqa: E402
     plot_deterministic_results,
     plot_irf_results,
     plot_model_irfs,
     plot_paths,
 )
-from .solvers.calibration import (
+from .solvers.calibration import (  # noqa: E402
     CalibrationResult,
     FunctionalTarget,
     PointTarget,
     calibrate,
 )
-from .solvers.det_spec import DetSpec
-from .solvers.linear_spec import LinearSpec
-from .solvers.results import (
+from .solvers.det_spec import DetSpec  # noqa: E402
+from .solvers.linear_spec import LinearSpec  # noqa: E402
+from .solvers.results import (  # noqa: E402
     DeterministicResult,
     IrfResult,
     PathResult,
     SequenceResult,
     SeriesTransform,
 )
-from .utils.io import (
+from .utils.io import (  # noqa: E402
     load_deterministic_result,
     load_model_irfs,
     load_sequence_result,

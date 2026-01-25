@@ -125,9 +125,7 @@ class FunctionBundle:
         )
 
         # Create lazy derivative dictionaries
-        self.grad_jit = _LazyDerivativeDict(
-            self._make_grad, self._argnums_list
-        )
+        self.grad_jit = _LazyDerivativeDict(self._make_grad, self._argnums_list)
         self.value_and_grad_jit = _LazyDerivativeDict(
             self._make_value_and_grad, self._argnums_list
         )
@@ -139,9 +137,7 @@ class FunctionBundle:
         )
         # Default jacobian aliases to rev for backward compatibility
         self.jacobian_jit = self.jacobian_rev_jit
-        self.hessian_jit = _LazyDerivativeDict(
-            self._make_hessian, self._argnums_list
-        )
+        self.hessian_jit = _LazyDerivativeDict(self._make_hessian, self._argnums_list)
         self.jacobian_fwd_multi_jit = {}
         self.jacobian_rev_multi_jit = {}
 

@@ -2321,7 +2321,9 @@ class Model:
             for key, value in serializable.items()
         }
 
-    def compute_derivatives(self, u, x, z, u_new, x_new, z_new, params, E=None, include_params=False):
+    def compute_derivatives(
+        self, u, x, z, u_new, x_new, z_new, params, E=None, include_params=False
+    ):
         """
         Compute derivatives of model functions.
 
@@ -2365,9 +2367,7 @@ class Model:
             bundle = bundle_info["bundle"]
             var_to_argnum = bundle_info["var_to_argnum"]
             included_vars = [
-                var
-                for var in arg_list
-                if not (var == "params" and not include_params)
+                var for var in arg_list if not (var == "params" and not include_params)
             ]
             argnums = tuple(var_to_argnum[var] for var in included_vars)
             jac_tuple = bundle.jacobian_fwd_multi(argnums)(*these_args)
@@ -2394,7 +2394,9 @@ class Model:
             init_vals["z"],
             init_vals["params"],
         )
-        self.compute_derivatives(u, x, z, u, x, z, params, include_params=include_params)
+        self.compute_derivatives(
+            u, x, z, u, x, z, params, include_params=include_params
+        )
 
     def get_s_steady(self):
 
