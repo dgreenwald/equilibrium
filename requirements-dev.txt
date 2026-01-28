@@ -11,6 +11,3 @@ pytest
 ruff
 mypy
 pre-commit
-
-# Utilities
-tabulate

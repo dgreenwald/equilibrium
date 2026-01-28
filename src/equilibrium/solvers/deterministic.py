@@ -894,8 +894,12 @@ def solve_sequence(
     # This is needed because when ux_init is None, we use steady_components
     if not base_mod._steady_solved:
         logger.info("Steady state not found for baseline model, solving...")
-        # TODO: we should have a check that if _steady_solved is True then
-        # the original run used the same calibration flag
+        base_mod.solve_steady(calibrate=calibrate_initial, display=display_steady)
+    elif base_mod._calibrated != calibrate_initial:
+        logger.warning(
+            f"Steady state was previously solved with calibrate={base_mod._calibrated}, "
+            f"but calibrate_initial={calibrate_initial} requested. Re-solving..."
+        )
         base_mod.solve_steady(calibrate=calibrate_initial, display=display_steady)
 
     # Ensure linearization is done if needed for terminal condition

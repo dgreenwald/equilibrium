@@ -688,6 +688,7 @@ class Model:
         # Flags to track solution status
         self._steady_solved = False
         self._linearized = False
+        self._calibrated = None  # None = not solved, True/False = calibrated or not
 
         # Initialize transformation registry
         # List of tuples: (var_list, transform_fn_str, inverse_fn_str, prefix)
@@ -2000,6 +2001,7 @@ class Model:
 
         # Mark steady state as solved
         self._steady_solved = True
+        self._calibrated = calibrate
 
     def _load_steady_snapshot(self, backup_to_use: int | None = None):
         """Load steady-state values previously saved with :meth:`solve_steady`."""
@@ -3015,7 +3017,7 @@ class Model:
             )
         )
 
-        # TODO: should probably have this be all_vars
+        # Derived vars are non-core variables that appear in State tuple
         self.derived_vars = (
             self.var_lists["intermediate"] + self.var_lists["read_expectations"]
         )
