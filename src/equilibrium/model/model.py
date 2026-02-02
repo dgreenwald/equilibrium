@@ -308,6 +308,141 @@ class BaseModelBlock:
             rule_keys=self.rule_keys,
         )
 
+    def with_suffix(self, suffix: str, variables: set[str]):
+        """Apply suffix to specific variables using word-boundary matching.
+
+        This method appends a suffix to variables in the set, using regex word
+        boundaries to match complete identifiers. The special _NEXT suffix is
+        preserved (VAR_NEXT becomes VAR<suffix>_NEXT).
+
+        Parameters
+        ----------
+        suffix : str
+            The suffix to append to variable names.
+        variables : set[str]
+            Set of variable names to suffix (typically LHS variables from rules).
+
+        Returns
+        -------
+        BaseModelBlock
+            New block with suffixed variables.
+
+        Examples
+        --------
+        If variables = {'K', 'Y'} and suffix = '_firm':
+        - 'K' -> 'K_firm'
+        - 'K_NEXT' -> 'K_firm_NEXT'
+        - 'Y' -> 'Y_firm'
+        - 'log_K' -> 'log_K' (K not a complete identifier)
+        - 'K_new' -> 'K_new' (different variable, not in the set)
+        """
+        import re
+
+        if not suffix or not variables:
+            return self
+
+        # Sort by length (longest first) to handle cases like 'K' and 'log_K' correctly
+        sorted_vars = sorted(variables, key=len, reverse=True)
+
+        def apply_suffix(text: str) -> str:
+            """Apply suffix to variables in text using word boundaries."""
+            result = text
+            for var in sorted_vars:
+                # Pattern 1: VAR_NEXT -> VAR<suffix>_NEXT
+                pattern_next = r"\b" + re.escape(var) + r"_NEXT\b"
+                result = re.sub(pattern_next, var + suffix + "_NEXT", result)
+
+                # Pattern 2: VAR -> VAR<suffix> (but not if already processed as VAR_NEXT)
+                # The negative lookahead (?!_NEXT) prevents matching VAR in VAR_NEXT
+                pattern_var = r"\b" + re.escape(var) + r"\b(?!_NEXT)"
+                result = re.sub(pattern_var, var + suffix, result)
+
+            return result
+
+        # Apply suffix to flags
+        new_flags = {}
+        for key, value in self.flags.items():
+            new_key = apply_suffix(key)
+            if new_key in new_flags:
+                raise ValueError(
+                    f"Suffix results in duplicate keys for flags: '{new_key}'"
+                )
+            new_flags[new_key] = value
+
+        # Apply suffix to params and steady_guess
+        new_params = {}
+        for key, value in self.params.items():
+            new_key = apply_suffix(key)
+            if new_key in new_params:
+                raise ValueError(
+                    f"Suffix results in duplicate keys for params: '{new_key}'"
+                )
+            new_params[new_key] = value
+
+        new_steady = {}
+        for key, value in self.steady_guess.items():
+            new_key = apply_suffix(key)
+            if new_key in new_steady:
+                raise ValueError(
+                    f"Suffix results in duplicate keys for steady_guess: '{new_key}'"
+                )
+            new_steady[new_key] = value
+
+        # Apply suffix to exog_list
+        new_exog = []
+        for exog in self.exog_list:
+            new_exog_name = apply_suffix(exog)
+            if new_exog_name in new_exog:
+                raise ValueError(
+                    f"Suffix results in duplicate exogenous variables: '{new_exog_name}'"
+                )
+            new_exog.append(new_exog_name)
+
+        # Apply suffix to rules (both LHS and RHS)
+        new_rules = {}
+        for key in self.rule_keys:
+            od = MyOrderedDict()
+            for rule_name, expression in self.rules.get(key, {}).items():
+                new_name = apply_suffix(rule_name)
+                if new_name in od:
+                    raise ValueError(
+                        f"Suffix results in duplicate rule names in '{key}': '{new_name}'"
+                    )
+                new_expr = apply_suffix(expression)
+                od[new_name] = new_expr
+            new_rules[key] = list(od.items())
+
+        return BaseModelBlock(
+            flags=new_flags,
+            params=new_params,
+            steady_guess=new_steady,
+            rules=new_rules,
+            exog_list=new_exog,
+            rule_keys=self.rule_keys,
+        )
+
+    @staticmethod
+    def _get_lhs_variables(block: "BaseModelBlock") -> set[str]:
+        """Extract all LHS variable names from block rules and exog_list.
+
+        Parameters
+        ----------
+        block : BaseModelBlock
+            Block to extract variable names from.
+
+        Returns
+        -------
+        set[str]
+            Set of all variable names that appear on the left-hand side of
+            rule assignments or in the exog_list.
+        """
+        lhs_vars = set()
+        for rule_category in block.rules.values():
+            for var_name, _expr in rule_category.items():
+                lhs_vars.add(var_name)
+        lhs_vars.update(block.exog_list)
+        return lhs_vars
+
     def add_block(
         self,
         block: "BaseModelBlock | None" = None,
@@ -319,6 +454,7 @@ class BaseModelBlock:
         exog_list=None,
         overwrite: bool = False,
         rename: dict[str, str] | None = None,
+        suffix: str | None = None,
     ):
         """Merge another block of configuration into this block.
 
@@ -334,7 +470,12 @@ class BaseModelBlock:
             When True, new values replace existing entries. When False,
             existing values win and only missing keys are appended.
         rename : dict, optional
-            Mapping of substring replacements to apply prior to merging.
+            Mapping of substring replacements to apply after suffix (if provided).
+        suffix : str, optional
+            Suffix to append to all variables created in the block (LHS variables).
+            Uses word-boundary matching so 'K' and 'log_K' are independent.
+            Special handling: VAR_NEXT becomes VAR<suffix>_NEXT. Applied before
+            ``rename`` if both are provided.
 
         Returns
         -------
@@ -377,6 +518,12 @@ class BaseModelBlock:
                     f"{self.rule_keys} vs {block.rule_keys}"
                 )
 
+        # Apply suffix first (if provided)
+        if suffix:
+            lhs_vars = self._get_lhs_variables(block)
+            block = block.with_suffix(suffix, lhs_vars)
+
+        # Then apply rename (if provided)
         if rename:
             block = block.with_replacements(rename)
 
@@ -761,6 +908,7 @@ class Model:
         exog_list=None,
         overwrite: bool = False,
         rename: dict[str, str] | None = None,
+        suffix: str | None = None,
     ):
         """Merge another block of configuration into the core block.
 
@@ -776,7 +924,12 @@ class Model:
             When True, new values replace existing entries. When False,
             existing values win and only missing keys are appended.
         rename : dict, optional
-            Mapping of substring replacements to apply prior to merging.
+            Mapping of substring replacements to apply after suffix (if provided).
+        suffix : str, optional
+            Suffix to append to all variables created in the block (LHS variables).
+            Uses word-boundary matching so 'K' and 'log_K' are independent.
+            Special handling: VAR_NEXT becomes VAR<suffix>_NEXT. Applied before
+            ``rename`` if both are provided.
         """
 
         if block is not None and any(
@@ -800,7 +953,7 @@ class Model:
                 raise TypeError("block must be a ModelBlock or BaseModelBlock instance")
 
         # Delegate to the core block's add_block method
-        self.core.add_block(block, overwrite=overwrite, rename=rename)
+        self.core.add_block(block, overwrite=overwrite, rename=rename, suffix=suffix)
 
         return self
 
