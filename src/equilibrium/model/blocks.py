@@ -35,6 +35,7 @@ class BaseModelBlock:
         self.steady_guess = PresetDict(initialize_if_none(steady_guess, {}))
         self.exog_list = initialize_if_none(exog_list, [])
         self.rule_keys = tuple(rule_keys)
+        self._transformations = []
 
         rules = initialize_if_none(rules, {})
         normalized = {}
@@ -45,6 +46,27 @@ class BaseModelBlock:
             else:
                 normalized[key] = MyOrderedDict(raw or {})
         self.rules = normalized
+
+    @staticmethod
+    def _generate_prefix_from_function(fn_str):
+        """
+        Generate a suitable prefix based on the function string.
+        """
+        prefix = re.sub(r"^(np|jnp)\.", "", fn_str)
+        prefix = re.sub(r"[^a-zA-Z0-9]+", "_", prefix)
+        return prefix.strip("_")
+
+    def transform_variables(self, var_list, transform_fn, inverse_fn, prefix=None):
+        """
+        Register a transformation to be applied to specified variables.
+        """
+        if prefix is None:
+            prefix = self._generate_prefix_from_function(transform_fn)
+        self._transformations.append((list(var_list), transform_fn, inverse_fn, prefix))
+
+    def log_transform(self, var_list, prefix="log"):
+        """Convenience method to apply logarithmic transformation to variables."""
+        self.transform_variables(var_list, "np.log", "np.exp", prefix)
 
     @staticmethod
     def _validate_replacements(replacements):
@@ -129,7 +151,7 @@ class BaseModelBlock:
                 od[new_name] = new_expr
             new_rules[key] = list(od.items())
 
-        return BaseModelBlock(
+        new_block = BaseModelBlock(
             flags=new_flags,
             params=new_params,
             steady_guess=new_steady,
@@ -137,6 +159,16 @@ class BaseModelBlock:
             exog_list=new_exog,
             rule_keys=self.rule_keys,
         )
+        new_block._transformations = [
+            (
+                [replace(name) for name in var_list],
+                transform_fn,
+                inverse_fn,
+                prefix,
+            )
+            for var_list, transform_fn, inverse_fn, prefix in self._transformations
+        ]
+        return new_block
 
     def with_suffix(
         self,
@@ -296,7 +328,7 @@ class BaseModelBlock:
                 od[new_name] = new_expr
             new_rules[key] = list(od.items())
 
-        return BaseModelBlock(
+        new_block = BaseModelBlock(
             flags=new_flags,
             params=new_params,
             steady_guess=new_steady,
@@ -304,6 +336,16 @@ class BaseModelBlock:
             exog_list=new_exog,
             rule_keys=self.rule_keys,
         )
+        new_block._transformations = [
+            (
+                [apply_suffix(name) for name in var_list],
+                transform_fn,
+                inverse_fn,
+                prefix,
+            )
+            for var_list, transform_fn, inverse_fn, prefix in self._transformations
+        ]
+        return new_block
 
     @staticmethod
     def _get_lhs_variables(block: "BaseModelBlock") -> set[str]:
@@ -490,6 +532,19 @@ class BaseModelBlock:
                     continue
                 destination[rule_name] = expression
 
+        if getattr(block, "_transformations", None):
+            for var_list, transform_fn, inverse_fn, prefix in block._transformations:
+                if exclude_vars_set:
+                    filtered = [
+                        name for name in var_list if name not in exclude_vars_set
+                    ]
+                else:
+                    filtered = list(var_list)
+                if filtered:
+                    self._transformations.append(
+                        (filtered, transform_fn, inverse_fn, prefix)
+                    )
+
         return self
 
     def __add__(self, other: "BaseModelBlock") -> "BaseModelBlock":
@@ -527,6 +582,10 @@ class BaseModelBlock:
             exog_list=list(self.exog_list),
             rule_keys=self.rule_keys,
         )
+        result._transformations = [
+            (list(var_list), transform_fn, inverse_fn, prefix)
+            for var_list, transform_fn, inverse_fn, prefix in self._transformations
+        ]
         # Merge the other block into the copy
         result.add_block(other, overwrite=False)
         return result

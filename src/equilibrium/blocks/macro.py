@@ -2,7 +2,7 @@
 Structural blocks for macroeconomic models
 """
 
-from equilibrium.model.model import ModelBlock, model_block
+from equilibrium.model import ModelBlock, model_block
 
 
 @model_block

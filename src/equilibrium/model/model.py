@@ -163,9 +163,9 @@ class Model:
         self._linearized = False
         self._calibrated = None  # None = not solved, True/False = calibrated or not
 
-        # Initialize transformation registry
+        # Initialize transformation registry (shared with core block)
         # List of tuples: (var_list, transform_fn_str, inverse_fn_str, prefix)
-        self._transformations = []
+        self._transformations = self.core._transformations
 
     def _normalize_rules(self, value):
         value = initialize_if_none(value, {})
