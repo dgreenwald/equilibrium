@@ -829,6 +829,12 @@ def _solve_scalar_root(
     if method is None:
         method = "brentq"  # Robust bracketing method
 
+    def _safe_residual(x):
+        try:
+            return float(abs(func(x)))
+        except Exception:
+            return np.inf
+
     try:
         sol = opt.root_scalar(
             func,
@@ -842,9 +848,55 @@ def _solve_scalar_root(
             parameters={"param_0": sol.root},
             parameters_array=np.array([sol.root]),
             success=sol.converged,
-            residual=abs(sol.function_calls) if hasattr(sol, "function_calls") else 0.0,
+            residual=_safe_residual(sol.root),
             iterations=sol.iterations if hasattr(sol, "iterations") else 0,
             message=sol.flag if hasattr(sol, "flag") else "",
+            method="root_scalar",
+        )
+
+    except ValueError as e:
+        # Brent-style methods require a sign change; fall back to secant if absent.
+        msg = str(e)
+        if "different signs" in msg or "sign" in msg:
+            x1 = bracket[1] if x0 != bracket[1] else bracket[0]
+            try:
+                sol = opt.root_scalar(
+                    func,
+                    method="secant",
+                    x0=x0,
+                    x1=x1,
+                    xtol=tol,
+                    maxiter=maxiter,
+                )
+                return CalibrationResult(
+                    parameters={"param_0": sol.root},
+                    parameters_array=np.array([sol.root]),
+                    success=sol.converged,
+                    residual=_safe_residual(sol.root),
+                    iterations=sol.iterations if hasattr(sol, "iterations") else 0,
+                    message=sol.flag if hasattr(sol, "flag") else msg,
+                    method="root_scalar",
+                )
+            except Exception as secant_err:
+                logger.error(
+                    "Scalar root finding failed after secant fallback: %s",
+                    str(secant_err),
+                )
+                return CalibrationResult(
+                    parameters={"param_0": x0},
+                    parameters_array=np.array([x0]),
+                    success=False,
+                    residual=_safe_residual(x0),
+                    message=str(secant_err),
+                    method="root_scalar",
+                )
+        logger.error("Scalar root finding failed: %s", msg)
+        return CalibrationResult(
+            parameters={"param_0": x0},
+            parameters_array=np.array([x0]),
+            success=False,
+            residual=_safe_residual(x0),
+            message=msg,
             method="root_scalar",
         )
 
@@ -854,6 +906,7 @@ def _solve_scalar_root(
             parameters={"param_0": x0},
             parameters_array=np.array([x0]),
             success=False,
+            residual=_safe_residual(x0),
             message=str(e),
             method="root_scalar",
         )

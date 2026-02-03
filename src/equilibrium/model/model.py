@@ -2397,7 +2397,11 @@ class Model:
         )
 
         for name in ["intermediate", "read_expectations"]:
-            self.rules[name] = self.rp.sort_dependencies(self.rules[name], ignore_vars)
+            self.rules[name] = self.rp.sort_dependencies(
+                self.rules[name],
+                ignore_vars,
+                category=name,
+            )
 
         self._get_var_lists()
 

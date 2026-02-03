@@ -117,7 +117,7 @@ class RuleProcessor:
             G.add_edge(dep, var)
         return G
 
-    def sort_dependencies(self, rules, ignore_vars=None):
+    def sort_dependencies(self, rules, ignore_vars=None, category=None):
         """
         Sort the rules topologically to respect dependencies. Raises if cycles are found.
 
@@ -135,7 +135,13 @@ class RuleProcessor:
         """
         ignore_vars = set(ignore_vars or [])
         G = nx.DiGraph()
+        deps_by_var: dict[str, set[str]] = {}
         for var, rule in rules.items():
+            if isinstance(rule, str):
+                deps = set(re.findall(self.p_word, rule)) - ignore_vars
+            else:
+                deps = set()
+            deps_by_var[var] = deps
             G = self.update_graph(G, var, rule, ignore_vars)
 
         cycles = list(nx.simple_cycles(G))
@@ -146,6 +152,22 @@ class RuleProcessor:
             raise Exception("Cyclic dependencies found in rules")
 
         sorted_vars = list(nx.topological_sort(G))
+        missing = [key for key in sorted_vars if key not in rules]
+        if missing:
+            msg_lines = [
+                "Missing rule(s) detected during dependency sort:",
+                f"  Category: {category}" if category else "  Category: <unknown>",
+                f"  Missing keys: {', '.join(sorted(missing))}",
+                "  Referenced by equations:",
+            ]
+            for missing_key in sorted(missing):
+                for var, deps in deps_by_var.items():
+                    if missing_key in deps:
+                        msg_lines.append(f"    {var}: {rules[var]}")
+            msg = "\n".join(msg_lines)
+            logger.error(msg)
+            raise KeyError(msg)
+
         return MyOrderedDict([(key, rules[key]) for key in sorted_vars])
 
     def get_steady_rules(self, rules, calibrate=True):
