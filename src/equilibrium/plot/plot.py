@@ -941,19 +941,32 @@ def plot_deterministic_results(
     from ..solvers.results import DeterministicResult, SequenceResult
     from ..utils.io import load_deterministic_result, load_sequence_result
 
-    results_list: List[Union[DeterministicResult, SequenceResult]] = []
+    results_list: List[DeterministicResult] = []
     auto_names: List[str] = []
     label_parts: List[str] = []
 
     if results is not None:
-        results_list = list(results)
+        for result in results:
+            if isinstance(result, SequenceResult):
+                results_list.append(result.splice(T_max=T_max))
+            elif isinstance(result, DeterministicResult):
+                results_list.append(result)
+            else:
+                raise TypeError(
+                    "results must contain DeterministicResult or SequenceResult, "
+                    f"got {type(result).__name__}."
+                )
         auto_names.extend([f"Result {i}" for i in range(len(results_list))])
 
     if result_labels:
         for model_label, experiment_label in result_labels:
             if result_kind == "sequence":
                 loaded = load_sequence_result(
-                    model_label, experiment_label, save_dir=save_dir
+                    model_label,
+                    experiment_label,
+                    save_dir=save_dir,
+                    splice=True,
+                    T_max=T_max,
                 )
             elif result_kind == "deterministic":
                 loaded = load_deterministic_result(
@@ -974,15 +987,7 @@ def plot_deterministic_results(
     # Process overlay data if provided
     if overlay_data is not None:
         # Get reference result for alignment (first result if available)
-        # If it's a SequenceResult, use the first regime as reference
         reference_result = results_list[0] if results_list else None
-        if reference_result is not None:
-            from ..solvers.results import SequenceResult
-
-            if isinstance(reference_result, SequenceResult):
-                reference_result = (
-                    reference_result.regimes[0] if reference_result.regimes else None
-                )
 
         # Convert overlay to DeterministicResult
         overlay_result = overlay_to_result(
@@ -1076,21 +1081,12 @@ def plot_deterministic_results(
     # Convert SequenceResults to DeterministicResults via splice
     processed_results: List[DeterministicResult] = []
     for i, result in enumerate(results_list):
-        if isinstance(result, SequenceResult):
-            # Determine T_max for this result if not specified
-            if T_max is None:
-                # Use the full spliced length based on time_list
-                # Take enough from each regime to complete the sequence
-                splice_t_max = _compute_default_T_max(result)
-            else:
-                splice_t_max = T_max
-            processed_results.append(result.splice(splice_t_max))
-        elif isinstance(result, DeterministicResult):
+        if isinstance(result, DeterministicResult):
             processed_results.append(result)
         else:
             raise TypeError(
                 f"Result at index {i} has unsupported type {type(result).__name__}. "
-                "Expected DeterministicResult or SequenceResult."
+                "Expected DeterministicResult."
             )
 
     if series_transforms is None and plot_spec is not None:
@@ -1186,53 +1182,6 @@ def plot_deterministic_results(
         plot_type=plot_type,
         **merged_kwargs,
     )
-
-
-def _compute_default_T_max(seq_result: "SequenceResult") -> int:
-    """
-    Compute a reasonable default T_max for splicing a SequenceResult.
-
-    This returns the sum of contributions from each regime:
-    - Regime 0 contributes time_list[0] + 1 periods (from t=0 to t=time_list[0])
-    - Subsequent regimes contribute time_list[i] - time_list[i-1] periods
-    - Last regime contributes its remaining periods (after skipping the first)
-
-    Parameters
-    ----------
-    seq_result : SequenceResult
-        The sequence result to compute T_max for.
-
-    Returns
-    -------
-    int
-        The default T_max value.
-    """
-    if seq_result.n_regimes == 0:
-        return 0
-
-    if seq_result.n_regimes == 1:
-        # Single regime: return its full length
-        return seq_result.regimes[0].UX.shape[0]
-
-    total = 0
-    for i, regime in enumerate(seq_result.regimes):
-        if i < len(seq_result.time_list):
-            if i == 0:
-                # First regime: include up to transition time (inclusive)
-                total += seq_result.time_list[i] + 1
-            else:
-                # Middle regimes: from previous transition +1 to current transition
-                # But skip first period (duplicate), so:
-                # periods = time_list[i] - time_list[i-1]
-                total += seq_result.time_list[i] - seq_result.time_list[i - 1]
-        else:
-            # Last regime: remaining periods (minus first which is duplicate)
-            if i > 0:
-                total += regime.UX.shape[0] - 1
-            else:
-                total += regime.UX.shape[0]
-
-    return total
 
 
 def plot_model_irfs(

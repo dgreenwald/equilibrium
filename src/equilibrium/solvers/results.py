@@ -237,6 +237,52 @@ class PathResult:
 
         return replace(self, UX=transformed_UX, Z=transformed_Z, Y=transformed_Y)
 
+    def __getitem__(self, name: str) -> np.ndarray:
+        """
+        Return a 1D series by name from UX, Z, or Y.
+
+        Parameters
+        ----------
+        name : str
+            Series name from var_names, exog_names, or y_names.
+
+        Returns
+        -------
+        np.ndarray
+            1D array of the requested series.
+
+        Raises
+        ------
+        KeyError
+            If the series name is not found, is ambiguous, or Y data is missing.
+        TypeError
+            If name is not a string.
+        """
+        if not isinstance(name, str):
+            raise TypeError("Series name must be a string.")
+
+        matches: list[tuple[str, int]] = []
+        if name in self.var_names:
+            matches.append(("UX", self.var_names.index(name)))
+        if name in self.exog_names:
+            matches.append(("Z", self.exog_names.index(name)))
+        if name in self.y_names:
+            matches.append(("Y", self.y_names.index(name)))
+
+        if not matches:
+            raise KeyError(f"Series '{name}' not found.")
+        if len(matches) > 1:
+            raise KeyError(f"Series '{name}' is ambiguous across multiple namespaces.")
+
+        source, idx = matches[0]
+        if source == "UX":
+            return self.UX[:, idx]
+        if source == "Z":
+            return self.Z[:, idx]
+        if self.Y is None:
+            raise KeyError(f"Series '{name}' is unavailable because Y is None.")
+        return self.Y[:, idx]
+
     def _get_metadata(self) -> dict:
         """Get metadata dictionary for saving. Override in subclasses."""
         return {
@@ -602,7 +648,7 @@ class SequenceResult:
 
     def splice(
         self,
-        T_max: int,
+        T_max: Optional[int] = None,
     ) -> "DeterministicResult":
         """
         Splice together regime results into a continuous DeterministicResult.
@@ -613,8 +659,10 @@ class SequenceResult:
 
         Parameters
         ----------
-        T_max : int
+        T_max : int, optional
             The total length of the spliced path (number of time periods).
+            If None, use a default computed from the regime lengths and
+            transition times.
 
         Returns
         -------
@@ -634,6 +682,8 @@ class SequenceResult:
         period of regime i+1 corresponds to the same time point as period
         time_list[i] in regime i, so we skip it to avoid duplication.
         """
+        if T_max is None:
+            T_max = self._compute_default_T_max()
         if self.n_regimes == 0:
             raise ValueError("Cannot splice an empty SequenceResult")
 
@@ -743,6 +793,47 @@ class SequenceResult:
             converged=all_converged,
             final_residual=max_residual,
         )
+
+    def _compute_default_T_max(self) -> int:
+        """
+        Compute a reasonable default T_max for splicing a SequenceResult.
+
+        This returns the sum of contributions from each regime:
+        - Regime 0 contributes time_list[0] + 1 periods (from t=0 to t=time_list[0])
+        - Subsequent regimes contribute time_list[i] - time_list[i-1] periods
+        - Last regime contributes its remaining periods (after skipping the first)
+
+        Returns
+        -------
+        int
+            The default T_max value.
+        """
+        if self.n_regimes == 0:
+            return 0
+
+        if self.n_regimes == 1:
+            # Single regime: return its full length
+            return self.regimes[0].UX.shape[0]
+
+        total = 0
+        for i, regime in enumerate(self.regimes):
+            if i < len(self.time_list):
+                if i == 0:
+                    # First regime: include up to transition time (inclusive)
+                    total += self.time_list[i] + 1
+                else:
+                    # Middle regimes: from previous transition +1 to current transition
+                    # But skip first period (duplicate), so:
+                    # periods = time_list[i] - time_list[i-1]
+                    total += self.time_list[i] - self.time_list[i - 1]
+            else:
+                # Last regime: remaining periods (minus first which is duplicate)
+                if i > 0:
+                    total += regime.UX.shape[0] - 1
+                else:
+                    total += regime.UX.shape[0]
+
+        return total
 
     def save(
         self,

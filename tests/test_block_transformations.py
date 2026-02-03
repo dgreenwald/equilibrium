@@ -67,3 +67,25 @@ def test_block_transformations_with_rename_and_suffix():
     assert "log_x_borrower_firm" in rules
     assert rules["log_x_borrower_firm"] == "np.log(a_borrower + 1)"
     assert rules["y_borrower_firm"] == "np.exp(log_x_borrower_firm) + 2"
+
+
+def test_block_transformations_suffixes_explicit_transformed_refs():
+    block = ModelBlock(
+        params={"a": 1.0},
+        rules={
+            "intermediate": [
+                ("x", "a + 1"),
+                ("y", "log_x + 2"),
+            ]
+        },
+    )
+    block.transform_variables(["x"], "np.log", "np.exp", prefix="log")
+
+    model = Model(inner_functions={})
+    model.add_block(block, suffix="_firm")
+    model._update_rules()
+
+    rules = model.rules["intermediate"]
+    assert "log_x_firm" in rules
+    assert rules["log_x_firm"] == "np.log(a + 1)"
+    assert rules["y_firm"] == "log_x_firm + 2"

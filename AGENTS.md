@@ -28,6 +28,7 @@ Contributors help maintain the high-performance JAX pipeline in Equilibrium; the
 - Mirror module names in `tests/test_<module>.py`; seed stochastic routines so JAX tracing stays deterministic.
 - Add regression fixtures under `tests/data/` (create if needed) and document provenance in a README beside the data.
 - Cover new solver paths with both shape and dtype assertions to catch JAX tracing regressions early.
+- Always run any new tests you add.
 
 ## Commit & Pull Request Guidelines
 - Commit subjects follow an imperative voice and stay concise (`Fix ruff linting errors`, `Update README...`); keep bodies focused on context and side-effects.

@@ -110,6 +110,38 @@ class TestPathResult:
         assert result.Y.shape == (10, 5)
         assert len(result.y_names) == 5
 
+    def test_path_result_getitem(self):
+        """Test PathResult series access by name."""
+        UX = np.random.randn(10, 2)
+        Z = np.random.randn(10, 1)
+        Y = np.random.randn(10, 3)
+
+        result = PathResult(
+            UX=UX,
+            Z=Z,
+            Y=Y,
+            var_names=["I", "log_K"],
+            exog_names=["Z_til"],
+            y_names=["y", "c", "K"],
+        )
+
+        assert np.allclose(result["I"], UX[:, 0])
+        assert np.allclose(result["Z_til"], Z[:, 0])
+        assert np.allclose(result["c"], Y[:, 1])
+
+        with pytest.raises(KeyError):
+            _ = result["missing"]
+
+        no_y = PathResult(
+            UX=UX,
+            Z=Z,
+            var_names=["I", "log_K"],
+            exog_names=["Z_til"],
+            y_names=["y", "c", "K"],
+        )
+        with pytest.raises(KeyError):
+            _ = no_y["c"]
+
     def test_path_result_save_load(self):
         """Test saving and loading PathResult."""
         UX = np.random.randn(10, 2)

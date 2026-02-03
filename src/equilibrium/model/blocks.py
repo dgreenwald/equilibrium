@@ -468,6 +468,19 @@ class BaseModelBlock:
         # Apply suffix first (if provided)
         if suffix:
             lhs_vars = self._get_lhs_variables(block)
+            # Include transformed variable names so explicit references (e.g. log_x)
+            # are suffixed consistently with their base variables.
+            if getattr(block, "_transformations", None):
+                for (
+                    var_list,
+                    _transform_fn,
+                    _inverse_fn,
+                    prefix,
+                ) in block._transformations:
+                    if not prefix:
+                        continue
+                    for var in var_list:
+                        lhs_vars.add(f"{prefix}_{var}")
             block = block.with_suffix(suffix, lhs_vars, suffix_before=suffix_before)
 
         # Then apply rename (if provided)

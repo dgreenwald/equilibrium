@@ -515,7 +515,9 @@ def load_sequence_result(
     experiment_label: Optional[str] = None,
     *,
     save_dir: Optional[Path | str] = None,
-) -> "SequenceResult":
+    splice: bool = False,
+    T_max: Optional[int] = None,
+) -> "SequenceResult | DeterministicResult":
     """
     Load a sequence result by model and experiment labels.
 
@@ -531,11 +533,16 @@ def load_sequence_result(
         "{model_label}.npz". If provided, loads "{model_label}_{experiment_label}.npz".
     save_dir : Path or str, optional
         Directory to load from. Defaults to settings.paths.save_dir.
+    splice : bool, default False
+        If True, splice the loaded SequenceResult before returning.
+    T_max : int, optional
+        Total length for splicing. If None, SequenceResult uses its default.
 
     Returns
     -------
-    SequenceResult
-        The loaded sequence result.
+    SequenceResult or DeterministicResult
+        The loaded sequence result, or a spliced DeterministicResult if
+        splice is True.
 
     Raises
     ------
@@ -550,10 +557,13 @@ def load_sequence_result(
     >>> # Load sequence result without experiment label
     >>> result = load_sequence_result("baseline")
 
+    >>> # Load and splice in one step
+    >>> result = load_sequence_result("baseline", splice=True, T_max=100)
+
     >>> # Use in plotting
     >>> results = [
-    ...     load_sequence_result("baseline", "pti_lib"),
-    ...     load_sequence_result("baseline", "ltv_lib"),
+    ...     load_sequence_result("baseline", "pti_lib", splice=True, T_max=100),
+    ...     load_sequence_result("baseline", "ltv_lib", splice=True, T_max=100),
     ... ]
     >>> plot_deterministic_results(results, include_list=["c", "y"])
 
@@ -599,4 +609,7 @@ def load_sequence_result(
         )
 
     # Load using SequenceResult.load()
-    return SequenceResult.load(filepath)
+    result = SequenceResult.load(filepath)
+    if splice:
+        return result.splice(T_max=T_max)
+    return result
