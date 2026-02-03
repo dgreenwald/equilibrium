@@ -282,6 +282,88 @@ def my_block(block, *, enable_feature: bool = False) -> ModelBlock:
     return block
 ```
 
+### Using Model Blocks with Suffix and Rename
+
+Model blocks support suffix and rename transformations with precise control over variable naming:
+
+```python
+from equilibrium import Model
+
+model = Model()
+
+# Block with placeholder variables
+agent_block_rules = {
+    "intermediate": {
+        "C_AGENT": "wage_AGENT * hours",
+        "S_AGENT": "income - C_AGENT",
+    }
+}
+
+# Add with suffix before placeholders (for better naming)
+model.add_block(
+    rules=agent_block_rules,
+    suffix="_worker",
+    suffix_before=["_AGENT"],  # Insert suffix BEFORE _AGENT
+    rename={"AGENT": "h"},
+)
+
+# Result: C_AGENT → C_worker_AGENT → C_worker_h (not C_AGENT_worker_h)
+```
+
+**suffix_before parameter**:
+- Controls where suffix is inserted within variable names
+- If variable ends with term(s) from `suffix_before + ["_NEXT"]`, suffix goes before that block
+- Accepts `list[str]`, `str`, or `None` (default: no special terms besides `_NEXT`)
+- Applied before `rename`, so use pre-rename placeholder names
+
+**Common usage**:
+```python
+# Standard placeholders
+model.add_block(
+    block,
+    suffix="_firm",
+    suffix_before=["_AGENT", "_ATYPE", "_INSTRUMENT"],
+    rename={"AGENT": "h", "ATYPE": "saver"},
+)
+
+# Without suffix_before (old behavior):
+# C_AGENT → C_AGENT_firm → C_h_firm
+
+# With suffix_before (new behavior):
+# C_AGENT → C_firm_AGENT → C_firm_h
+```
+
+### Excluding Variables from Blocks
+
+When you want most of a block but need custom implementations for specific variables:
+
+```python
+from equilibrium import Model
+from equilibrium.blocks.macro import investment_block
+
+model = Model()
+
+# Add block but exclude K_new to define it ourselves
+model.add_block(
+    investment_block(),
+    suffix="_firm",
+    suffix_before=["_AGENT"],
+    rename={"AGENT": "household"},
+    exclude_vars={"K_new_firm_household"}  # Use final name after all transforms
+)
+
+# Provide custom transition equation
+model.rules['transition'] += [
+    ('K_new_firm_household', 'custom_capital_accumulation_formula'),
+]
+```
+
+**exclude_vars parameter**:
+- Specify variable names AFTER all transformations (suffix → suffix_before → rename)
+- Applies to rules and exog_list, not params/steady_guess/flags
+- Takes precedence over `overwrite=True`
+- Accepts `set[str]`, `list[str]`, or `None` (default: no exclusion)
+
 ### Configuration and Settings
 
 Equilibrium uses Pydantic-based centralized configuration (`settings.py`):

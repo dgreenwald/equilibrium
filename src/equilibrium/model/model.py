@@ -308,7 +308,12 @@ class BaseModelBlock:
             rule_keys=self.rule_keys,
         )
 
-    def with_suffix(self, suffix: str, variables: set[str]):
+    def with_suffix(
+        self,
+        suffix: str,
+        variables: set[str],
+        suffix_before: list[str] | str | None = None,
+    ):
         """Apply suffix to specific variables using word-boundary matching.
 
         This method appends a suffix to variables in the set, using regex word
@@ -321,6 +326,11 @@ class BaseModelBlock:
             The suffix to append to variable names.
         variables : set[str]
             Set of variable names to suffix (typically LHS variables from rules).
+        suffix_before : list[str] or str, optional
+            Additional terms (besides _NEXT) to insert suffix before. For example,
+            if suffix_before=['_AGENT'] and suffix='_firm', then 'C_AGENT' becomes
+            'C_firm_AGENT' rather than 'C_AGENT_firm'. Useful with placeholder
+            variables that will be renamed later. Accepts a single string or list.
 
         Returns
         -------
@@ -335,27 +345,72 @@ class BaseModelBlock:
         - 'Y' -> 'Y_firm'
         - 'log_K' -> 'log_K' (K not a complete identifier)
         - 'K_new' -> 'K_new' (different variable, not in the set)
+
+        If variables = {'C', 'I'}, suffix = '_firm', suffix_before = ['_AGENT']:
+        - 'C_AGENT' -> 'C_firm_AGENT'
+        - 'I' -> 'I_firm'
         """
         import re
 
         if not suffix or not variables:
             return self
 
+        # Normalize suffix_before to a list
+        if suffix_before is None:
+            suffix_before_list = []
+        elif isinstance(suffix_before, str):
+            suffix_before_list = [suffix_before]
+        elif isinstance(suffix_before, list):
+            suffix_before_list = suffix_before
+        else:
+            raise TypeError(
+                f"suffix_before must be a list, str, or None, got {type(suffix_before)}"
+            )
+
         # Sort by length (longest first) to handle cases like 'K' and 'log_K' correctly
         sorted_vars = sorted(variables, key=len, reverse=True)
+
+        # Build list of special terms to insert suffix before
+        # Always include _NEXT, plus any user-specified terms
+        special_terms = suffix_before_list + ["_NEXT"]
+
+        # Create regex pattern for matching special term sequences at end of variable
+        if special_terms:
+            terms_pattern = "(?:" + "|".join(re.escape(t) for t in special_terms) + ")*"
+        else:
+            terms_pattern = ""
+
+        # Pre-compute suffixed forms for each variable
+        var_to_suffixed = {}
+        for var in sorted_vars:
+            # Analyze variable to determine where suffix goes
+            # Pattern: variable = (prefix)(special_terms_sequence)
+            pattern = r"^(\w*?)(" + terms_pattern + r")$"
+            match = re.match(pattern, var)
+            if match:
+                # Insert suffix before special terms (if any)
+                suffixed_var = match.group(1) + suffix + match.group(2)
+            else:
+                # Shouldn't happen with the pattern above, but fallback to append
+                suffixed_var = var + suffix
+            var_to_suffixed[var] = suffixed_var
 
         def apply_suffix(text: str) -> str:
             """Apply suffix to variables in text using word boundaries."""
             result = text
             for var in sorted_vars:
-                # Pattern 1: VAR_NEXT -> VAR<suffix>_NEXT
-                pattern_next = r"\b" + re.escape(var) + r"_NEXT\b"
-                result = re.sub(pattern_next, var + suffix + "_NEXT", result)
+                suffixed_var = var_to_suffixed[var]
 
-                # Pattern 2: VAR -> VAR<suffix> (but not if already processed as VAR_NEXT)
-                # The negative lookahead (?!_NEXT) prevents matching VAR in VAR_NEXT
-                pattern_var = r"\b" + re.escape(var) + r"\b(?!_NEXT)"
-                result = re.sub(pattern_var, var + suffix, result)
+                # Handle temporal _NEXT: VAR_NEXT -> suffixed_VAR_NEXT
+                # This catches cases where _NEXT appears after the variable in expressions
+                result = re.sub(
+                    r"\b" + re.escape(var) + r"_NEXT\b", suffixed_var + "_NEXT", result
+                )
+
+                # Handle variable itself (but not when followed by _NEXT)
+                result = re.sub(
+                    r"\b" + re.escape(var) + r"\b(?!_NEXT)", suffixed_var, result
+                )
 
             return result
 
@@ -455,6 +510,8 @@ class BaseModelBlock:
         overwrite: bool = False,
         rename: dict[str, str] | None = None,
         suffix: str | None = None,
+        suffix_before: list[str] | str | None = None,
+        exclude_vars: set[str] | list[str] | None = None,
     ):
         """Merge another block of configuration into this block.
 
@@ -476,11 +533,30 @@ class BaseModelBlock:
             Uses word-boundary matching so 'K' and 'log_K' are independent.
             Special handling: VAR_NEXT becomes VAR<suffix>_NEXT. Applied before
             ``rename`` if both are provided.
+        suffix_before : list[str] or str, optional
+            Additional terms (besides _NEXT) to insert suffix before. For example,
+            if suffix_before=['_AGENT'] and suffix='_firm', then 'C_AGENT' becomes
+            'C_firm_AGENT' rather than 'C_AGENT_firm'. Useful with placeholder
+            variables that will be renamed later. Applied during suffix phase,
+            before ``rename``. Default is None (no additional terms).
+        exclude_vars : set[str] or list[str], optional
+            Set or list of variable names (LHS variables) to exclude from the
+            incoming block. Excluded variables will not be added to rules or
+            exog_list. Does not affect params, steady_guess, or flags.
+            Applied after suffix and rename transformations, so exclusions
+            should use the final transformed variable names.
+            Default is None (no exclusion).
 
         Returns
         -------
         BaseModelBlock
             Returns self to allow method chaining.
+
+        Notes
+        -----
+        When both ``exclude_vars`` and ``overwrite`` are specified, exclusion
+        takes precedence. Variables in ``exclude_vars`` will never be added,
+        regardless of the ``overwrite`` setting.
 
         Raises
         ------
@@ -521,11 +597,23 @@ class BaseModelBlock:
         # Apply suffix first (if provided)
         if suffix:
             lhs_vars = self._get_lhs_variables(block)
-            block = block.with_suffix(suffix, lhs_vars)
+            block = block.with_suffix(suffix, lhs_vars, suffix_before=suffix_before)
 
         # Then apply rename (if provided)
         if rename:
             block = block.with_replacements(rename)
+
+        # Normalize exclude_vars to a set for O(1) lookup
+        if exclude_vars is None:
+            exclude_vars_set = set()
+        elif isinstance(exclude_vars, set):
+            exclude_vars_set = exclude_vars
+        elif isinstance(exclude_vars, list):
+            exclude_vars_set = set(exclude_vars)
+        else:
+            raise TypeError(
+                f"exclude_vars must be a set, list, or None, got {type(exclude_vars)}"
+            )
 
         # Merge flags
         if block.flags:
@@ -551,6 +639,9 @@ class BaseModelBlock:
         # Merge exogenous list while avoiding duplicates unless overwrite requested
         if block.exog_list:
             for exog in block.exog_list:
+                # Skip excluded variables
+                if exog in exclude_vars_set:
+                    continue
                 if overwrite and exog in self.exog_list:
                     self.exog_list.remove(exog)
                 if exog not in self.exog_list:
@@ -563,6 +654,9 @@ class BaseModelBlock:
                 continue
             destination = self.rules[key]
             for rule_name, expression in incoming.items():
+                # Skip excluded variables
+                if rule_name in exclude_vars_set:
+                    continue
                 if not overwrite and rule_name in destination:
                     continue
                 destination[rule_name] = expression
@@ -909,6 +1003,8 @@ class Model:
         overwrite: bool = False,
         rename: dict[str, str] | None = None,
         suffix: str | None = None,
+        suffix_before: list[str] | str | None = None,
+        exclude_vars: set[str] | list[str] | None = None,
     ):
         """Merge another block of configuration into the core block.
 
@@ -930,6 +1026,12 @@ class Model:
             Uses word-boundary matching so 'K' and 'log_K' are independent.
             Special handling: VAR_NEXT becomes VAR<suffix>_NEXT. Applied before
             ``rename`` if both are provided.
+        suffix_before : list[str] or str, optional
+            Additional terms to insert suffix before. See
+            :meth:`BaseModelBlock.add_block` for details.
+        exclude_vars : set[str] or list[str], optional
+            Set or list of variable names to exclude from the incoming block.
+            See :meth:`BaseModelBlock.add_block` for details.
         """
 
         if block is not None and any(
@@ -953,7 +1055,14 @@ class Model:
                 raise TypeError("block must be a ModelBlock or BaseModelBlock instance")
 
         # Delegate to the core block's add_block method
-        self.core.add_block(block, overwrite=overwrite, rename=rename, suffix=suffix)
+        self.core.add_block(
+            block,
+            overwrite=overwrite,
+            rename=rename,
+            suffix=suffix,
+            suffix_before=suffix_before,
+            exclude_vars=exclude_vars,
+        )
 
         return self
 
