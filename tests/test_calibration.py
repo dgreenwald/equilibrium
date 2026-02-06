@@ -20,7 +20,9 @@ from equilibrium import Model
 from equilibrium.solvers.calibration import (
     CalibrationResult,
     FunctionalTarget,
+    ModelParam,
     PointTarget,
+    ShockParam,
     calibrate,
 )
 from equilibrium.solvers.det_spec import DetSpec
@@ -193,13 +195,7 @@ class TestCalibrationScalarJustIdentified:
         """Test scalar parameter calibration using linear IRF."""
         base_model = create_simple_model()
 
-        # Define parameter mapping: calibrate shock size
-        def param_to_model(params):
-            shock_size = params[0]
-            # Return model and LinearSpec
-            return base_model, LinearSpec(
-                shock_name="Z_til", shock_size=shock_size, Nt=50
-            )
+        calib_params = [ShockParam("Z_til", initial=0.005, bounds=(0.0001, 0.1))]
 
         # Target: IRF of investment (I) at time 5 should be close to specific value
         # First, compute reference IRF to get a target using existing machinery
@@ -220,10 +216,9 @@ class TestCalibrationScalarJustIdentified:
         result = calibrate(
             model=base_model,
             targets=targets,
-            param_to_model=param_to_model,
-            initial_params=np.array([0.005]),
+            calib_params=calib_params,
             solver="linear_irf",
-            bounds=[(0.0001, 0.1)],
+            spec=ref_spec,
             tol=1e-6,
         )
 
@@ -238,13 +233,9 @@ class TestCalibrationScalarJustIdentified:
         """Test scalar parameter calibration using deterministic solver."""
         base_model = create_simple_model()
 
-        # Define parameter mapping: calibrate a shock value
-        def param_to_model(params):
-            shock_val = params[0]
-            spec = DetSpec(Nt=50)
-            spec.add_regime(0)
-            spec.add_shock(0, "Z_til", shock_per=0, shock_val=shock_val)
-            return base_model, spec
+        calib_params = [
+            ShockParam("Z_til", initial=0.01, bounds=(0.0, 0.1), regime=0, period=0)
+        ]
 
         # Target: investment (I) at time 10
         targets = [PointTarget(variable="I", time=10, value=0.55)]
@@ -253,10 +244,9 @@ class TestCalibrationScalarJustIdentified:
         result = calibrate(
             model=base_model,
             targets=targets,
-            param_to_model=param_to_model,
-            initial_params=np.array([0.01]),
+            calib_params=calib_params,
             solver="deterministic",
-            bounds=[(0.0, 0.1)],
+            spec=DetSpec(Nt=50),
             tol=1e-4,
         )
 
@@ -274,15 +264,10 @@ class TestCalibrationVectorJustIdentified:
         """Test vector parameter calibration using linear sequence solver."""
         base_model = create_simple_model()
 
-        # Define parameter mapping: calibrate two shock values
-        def param_to_model(params):
-            shock1, shock2 = params
-            spec = DetSpec()
-            spec.add_regime(0)
-            spec.add_shock(0, "Z_til", shock_per=0, shock_val=shock1)
-            spec.add_regime(1, time_regime=20)
-            spec.add_shock(1, "Z_til", shock_per=0, shock_val=shock2)
-            return base_model, spec
+        calib_params = [
+            ShockParam("Z_til", initial=0.005, bounds=(0.0, 0.1), regime=0, period=0),
+            ShockParam("Z_til", initial=0.015, bounds=(0.0, 0.1), regime=1, period=0),
+        ]
 
         # Get reference values
         ref_spec = DetSpec()
@@ -307,9 +292,9 @@ class TestCalibrationVectorJustIdentified:
         result = calibrate(
             model=base_model,
             targets=targets,
-            param_to_model=param_to_model,
-            initial_params=np.array([0.005, 0.015]),
+            calib_params=calib_params,
             solver="linear_sequence",
+            spec=ref_spec,
             tol=1e-5,
         )
 
@@ -328,13 +313,9 @@ class TestCalibrationOverIdentified:
         """Test scalar parameter calibration with multiple targets."""
         base_model = create_simple_model()
 
-        # Define parameter mapping
-        def param_to_model(params):
-            shock_val = params[0]
-            spec = DetSpec()
-            spec.add_regime(0)
-            spec.add_shock(0, "Z_til", shock_per=0, shock_val=shock_val)
-            return base_model, spec
+        calib_params = [
+            ShockParam("Z_til", initial=0.01, bounds=(0.0, 0.1), regime=0, period=0)
+        ]
 
         # Multiple targets for single parameter (over-identified)
         targets = [
@@ -347,10 +328,9 @@ class TestCalibrationOverIdentified:
         result = calibrate(
             model=base_model,
             targets=targets,
-            param_to_model=param_to_model,
-            initial_params=np.array([0.01]),
+            calib_params=calib_params,
             solver="linear_sequence",
-            bounds=[(0.0, 0.1)],
+            spec=DetSpec(),
             tol=1e-5,
         )
 
@@ -363,15 +343,10 @@ class TestCalibrationOverIdentified:
         """Test vector parameter calibration with more targets than parameters."""
         base_model = create_simple_model()
 
-        # Define parameter mapping: 2 parameters
-        def param_to_model(params):
-            shock1, shock2 = params
-            spec = DetSpec()
-            spec.add_regime(0)
-            spec.add_shock(0, "Z_til", shock_per=0, shock_val=shock1)
-            spec.add_regime(1, time_regime=20)
-            spec.add_shock(1, "Z_til", shock_per=0, shock_val=shock2)
-            return base_model, spec
+        calib_params = [
+            ShockParam("Z_til", initial=0.01, bounds=(0.0, 0.1), regime=0, period=0),
+            ShockParam("Z_til", initial=0.02, bounds=(0.0, 0.1), regime=1, period=0),
+        ]
 
         # 3 targets for 2 parameters (over-identified)
         targets = [
@@ -380,13 +355,17 @@ class TestCalibrationOverIdentified:
             PointTarget(variable="I", time=30, value=0.543),
         ]
 
+        template_spec = DetSpec()
+        template_spec.add_regime(0)
+        template_spec.add_regime(1, time_regime=20)
+
         # Calibrate
         result = calibrate(
             model=base_model,
             targets=targets,
-            param_to_model=param_to_model,
-            initial_params=np.array([0.01, 0.02]),
+            calib_params=calib_params,
             solver="linear_sequence",
+            spec=template_spec,
             tol=1e-4,
         )
 
@@ -403,13 +382,9 @@ class TestFunctionalTargetCalibration:
         """Test calibration with a functional target."""
         base_model = create_simple_model()
 
-        # Define parameter mapping
-        def param_to_model(params):
-            shock_val = params[0]
-            spec = DetSpec()
-            spec.add_regime(0)
-            spec.add_shock(0, "Z_til", shock_per=0, shock_val=shock_val)
-            return base_model, spec
+        calib_params = [
+            ShockParam("Z_til", initial=0.01, bounds=(0.0, 0.1), regime=0, period=0)
+        ]
 
         # Functional target: average consumption over first 10 periods
         def avg_consumption_error(result):
@@ -432,10 +407,9 @@ class TestFunctionalTargetCalibration:
         result = calibrate(
             model=base_model,
             targets=targets,
-            param_to_model=param_to_model,
-            initial_params=np.array([0.01]),
+            calib_params=calib_params,
             solver="linear_sequence",
-            bounds=[(0.0, 0.1)],
+            spec=DetSpec(),
             tol=1e-4,
         )
 
@@ -447,15 +421,10 @@ class TestFunctionalTargetCalibration:
         """Test calibration with both PointTarget and FunctionalTarget."""
         base_model = create_simple_model()
 
-        # Define parameter mapping
-        def param_to_model(params):
-            shock1, shock2 = params
-            spec = DetSpec()
-            spec.add_regime(0)
-            spec.add_shock(0, "Z_til", shock_per=0, shock_val=shock1)
-            spec.add_regime(1, time_regime=20)
-            spec.add_shock(1, "Z_til", shock_per=0, shock_val=shock2)
-            return base_model, spec
+        calib_params = [
+            ShockParam("Z_til", initial=0.01, bounds=(0.0, 0.1), regime=0, period=0),
+            ShockParam("Z_til", initial=0.02, bounds=(0.0, 0.1), regime=1, period=0),
+        ]
 
         # Mixed targets
         def std_investment_error(result):
@@ -468,13 +437,17 @@ class TestFunctionalTargetCalibration:
             FunctionalTarget(func=std_investment_error, description="Std(I) = 0.005"),
         ]
 
+        template_spec = DetSpec()
+        template_spec.add_regime(0)
+        template_spec.add_regime(1, time_regime=20)
+
         # Calibrate
         result = calibrate(
             model=base_model,
             targets=targets,
-            param_to_model=param_to_model,
-            initial_params=np.array([0.01, 0.02]),
+            calib_params=calib_params,
             solver="linear_sequence",
+            spec=template_spec,
             tol=1e-4,
         )
 
@@ -490,24 +463,26 @@ class TestCalibrationValidation:
         """Test that calibration raises error with no targets."""
         base_model = create_simple_model()
 
-        def param_to_model(params):
-            return base_model, DetSpec()
-
         with pytest.raises(ValueError, match="At least one target"):
             calibrate(
                 model=base_model,
                 targets=[],
-                param_to_model=param_to_model,
-                initial_params=np.array([0.01]),
+                calib_params=[
+                    ShockParam(
+                        "Z_til",
+                        initial=0.01,
+                        bounds=(0.0, 0.1),
+                        regime=0,
+                        period=0,
+                    )
+                ],
                 solver="linear_irf",
+                spec=LinearSpec(shock_name="Z_til", shock_size=0.01, Nt=50),
             )
 
     def test_underidentified_error(self):
         """Test that calibration raises error for under-identified problems."""
         base_model = create_simple_model()
-
-        def param_to_model(params):
-            return base_model, DetSpec()
 
         # More parameters than targets
         targets = [PointTarget(variable="I", time=10, value=0.6)]
@@ -516,17 +491,18 @@ class TestCalibrationValidation:
             calibrate(
                 model=base_model,
                 targets=targets,
-                param_to_model=param_to_model,
-                initial_params=np.array([0.01, 0.02, 0.03]),  # 3 params, 1 target
-                solver="linear_irf",
+                calib_params=[
+                    ModelParam("bet", initial=0.95, bounds=(0.9, 0.99)),
+                    ModelParam("alp", initial=0.6, bounds=(0.2, 0.9)),
+                    ModelParam("delta", initial=0.1, bounds=(0.01, 0.2)),
+                ],
+                solver="deterministic",
+                spec=DetSpec(Nt=10),
             )
 
     def test_invalid_solver_error(self):
         """Test that calibration raises error for invalid solver."""
         base_model = create_simple_model()
-
-        def param_to_model(params):
-            return base_model, DetSpec()
 
         targets = [PointTarget(variable="I", time=10, value=0.6)]
 
@@ -534,9 +510,17 @@ class TestCalibrationValidation:
             calibrate(
                 model=base_model,
                 targets=targets,
-                param_to_model=param_to_model,
-                initial_params=np.array([0.01]),
+                calib_params=[
+                    ShockParam(
+                        "Z_til",
+                        initial=0.01,
+                        bounds=(0.0, 0.1),
+                        regime=0,
+                        period=0,
+                    )
+                ],
                 solver="invalid_solver",
+                spec=DetSpec(Nt=10),
             )
 
 
@@ -590,13 +574,9 @@ class TestWeightedCalibration:
         """Test calibration with weighted PointTargets."""
         base_model = create_simple_model()
 
-        # Define parameter mapping
-        def param_to_model(params):
-            shock_val = params[0]
-            spec = DetSpec()
-            spec.add_regime(0)
-            spec.add_shock(0, "Z_til", shock_per=0, shock_val=shock_val)
-            return base_model, spec
+        calib_params = [
+            ShockParam("Z_til", initial=0.01, bounds=(0.0, 0.1), regime=0, period=0)
+        ]
 
         # Multiple targets with different weights (over-identified)
         targets = [
@@ -611,10 +591,9 @@ class TestWeightedCalibration:
         result = calibrate(
             model=base_model,
             targets=targets,
-            param_to_model=param_to_model,
-            initial_params=np.array([0.01]),
+            calib_params=calib_params,
             solver="linear_sequence",
-            bounds=[(0.0, 0.1)],
+            spec=DetSpec(),
             tol=1e-5,
         )
 
@@ -627,13 +606,9 @@ class TestWeightedCalibration:
         """Test calibration with weighted FunctionalTarget."""
         base_model = create_simple_model()
 
-        # Define parameter mapping
-        def param_to_model(params):
-            shock_val = params[0]
-            spec = DetSpec()
-            spec.add_regime(0)
-            spec.add_shock(0, "Z_til", shock_per=0, shock_val=shock_val)
-            return base_model, spec
+        calib_params = [
+            ShockParam("Z_til", initial=0.01, bounds=(0.0, 0.1), regime=0, period=0)
+        ]
 
         # Functional target that returns multiple values with weights
         def multi_moment_error(result):
@@ -654,10 +629,9 @@ class TestWeightedCalibration:
         result = calibrate(
             model=base_model,
             targets=targets,
-            param_to_model=param_to_model,
-            initial_params=np.array([0.01]),
+            calib_params=calib_params,
             solver="linear_sequence",
-            bounds=[(0.0, 0.1)],
+            spec=DetSpec(),
             tol=1e-4,
         )
 

@@ -15,6 +15,7 @@ to specified target outcomes. It supports:
 
 from __future__ import annotations
 
+import copy
 import logging
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Union
@@ -134,6 +135,146 @@ class FunctionalTarget:
 
 
 @dataclass
+class ModelParam:
+    """
+    Declares a base-model parameter to calibrate.
+
+    Changing a ``ModelParam`` triggers ``update_copy`` + ``solve_steady`` +
+    ``linearize`` (cached: only re-solved when the value actually changes).
+
+    Parameters
+    ----------
+    name : str
+        Key in ``model.params``.
+    initial : float
+        Starting value for the optimiser.
+    bounds : tuple of (float, float)
+        (lower, upper) bounds.
+
+    Examples
+    --------
+    >>> ModelParam("bet", initial=0.95, bounds=(0.90, 0.99))
+    """
+
+    name: str
+    initial: float
+    bounds: tuple[float, float]
+
+    def __post_init__(self):
+        if not self.name:
+            raise ValueError("ModelParam name must be non-empty")
+        lo, hi = self.bounds
+        if lo > hi:
+            raise ValueError(
+                f"ModelParam bounds are inverted: lower ({lo}) > upper ({hi})"
+            )
+        if not (lo <= self.initial <= hi):
+            raise ValueError(
+                f"ModelParam initial value {self.initial} is outside "
+                f"bounds ({lo}, {hi})"
+            )
+
+
+@dataclass
+class ShockParam:
+    """
+    Declares a shock size to calibrate.
+
+    Changing a ``ShockParam`` only modifies the spec (no model re-solve).
+
+    Parameters
+    ----------
+    name : str
+        Exogenous variable name (must be in ``model.exog_list``).
+    initial : float
+        Starting value for the optimiser.
+    bounds : tuple of (float, float)
+        (lower, upper) bounds.
+    regime : int
+        Regime index in ``DetSpec`` (or ignored for ``LinearSpec``).
+    period : int
+        Period at which the shock hits (maps to ``shock_per`` in ``DetSpec``).
+
+    Examples
+    --------
+    >>> ShockParam("Z_til", initial=0.01, bounds=(0.0, 0.1), regime=0, period=0)
+    """
+
+    name: str
+    initial: float
+    bounds: tuple[float, float]
+    regime: int = 0
+    period: int = 0
+
+    def __post_init__(self):
+        if not self.name:
+            raise ValueError("ShockParam name must be non-empty")
+        if self.regime < 0:
+            raise ValueError(
+                f"ShockParam regime must be non-negative, got {self.regime}"
+            )
+        if self.period < 0:
+            raise ValueError(
+                f"ShockParam period must be non-negative, got {self.period}"
+            )
+        lo, hi = self.bounds
+        if lo > hi:
+            raise ValueError(
+                f"ShockParam bounds are inverted: lower ({lo}) > upper ({hi})"
+            )
+
+
+@dataclass
+class RegimeParam:
+    """
+    Declares a regime-specific parameter override to calibrate.
+
+    Changing a ``RegimeParam`` only modifies the spec (no model re-solve).
+
+    Parameters
+    ----------
+    name : str
+        Parameter name to override in ``DetSpec.preset_par_list[regime]``.
+    regime : int or list of int
+        Regime index (or indices for persistent changes across regimes).
+    initial : float
+        Starting value for the optimiser.
+    bounds : tuple of (float, float)
+        (lower, upper) bounds.
+
+    Examples
+    --------
+    >>> RegimeParam("tau", regime=1, initial=0.35, bounds=(0.2, 0.5))
+    >>> RegimeParam("tau", regime=[1, 2, 3], initial=0.35, bounds=(0.2, 0.5))
+    """
+
+    name: str
+    regime: int | list[int]
+    initial: float
+    bounds: tuple[float, float]
+
+    def __post_init__(self):
+        if not self.name:
+            raise ValueError("RegimeParam name must be non-empty")
+        # Normalise regime to list
+        if isinstance(self.regime, int):
+            self.regime = [self.regime]
+        for r in self.regime:
+            if r < 0:
+                raise ValueError(f"RegimeParam regime must be non-negative, got {r}")
+        lo, hi = self.bounds
+        if lo > hi:
+            raise ValueError(
+                f"RegimeParam bounds are inverted: lower ({lo}) > upper ({hi})"
+            )
+        if not (lo <= self.initial <= hi):
+            raise ValueError(
+                f"RegimeParam initial value {self.initial} is outside "
+                f"bounds ({lo}, {hi})"
+            )
+
+
+@dataclass
 class CalibrationResult:
     """
     Container for calibration results.
@@ -171,13 +312,199 @@ class CalibrationResult:
     method: str = ""
 
 
+# ---------------------------------------------------------------------------
+# Internal helpers for declarative calib_params
+# ---------------------------------------------------------------------------
+
+
+def _build_spec(
+    template_spec: Union[DetSpec, LinearSpec],
+    regime_params: list[RegimeParam],
+    shock_params: list[ShockParam],
+    regime_vals: np.ndarray,
+    shock_vals: np.ndarray,
+) -> Union[DetSpec, LinearSpec]:
+    """
+    Build a concrete spec from a template by applying current regime/shock values.
+
+    For ``DetSpec``: deep-copies, sets regime param overrides, deduplicates
+    shocks, then adds calibrated shocks.
+
+    For ``LinearSpec``: creates a new ``LinearSpec`` with the shock size from
+    the single ``ShockParam``.
+    """
+    if isinstance(template_spec, LinearSpec):
+        # LinearSpec: at most one ShockParam, no RegimeParam (validated earlier)
+        if len(shock_params) == 1:
+            return LinearSpec(
+                shock_name=shock_params[0].name,
+                shock_size=float(shock_vals[0]),
+                Nt=template_spec.Nt,
+            )
+        # No shock params → return template as-is
+        return template_spec
+
+    # DetSpec path
+    spec = copy.deepcopy(template_spec)
+
+    # Apply regime param overrides
+    for rp, val in zip(regime_params, regime_vals):
+        for r in rp.regime:
+            spec.update_n_regimes(r + 1)
+            spec.preset_par_list[r][rp.name] = float(val)
+
+    # Apply shock params (with deduplication)
+    for sp, val in zip(shock_params, shock_vals):
+        spec.update_n_regimes(sp.regime + 1)
+        # Remove any existing shock matching (name, period) in this regime
+        spec.shocks[sp.regime] = [
+            s
+            for s in spec.shocks[sp.regime]
+            if not (s[0] == sp.name and int(s[1]) == sp.period)
+        ]
+        spec.add_shock(sp.regime, sp.name, shock_per=sp.period, shock_val=float(val))
+
+    return spec
+
+
+def _build_param_to_model(
+    model,
+    calib_params: list[Union[ModelParam, ShockParam, RegimeParam]],
+    template_spec: Union[DetSpec, LinearSpec],
+) -> tuple[Callable, np.ndarray, list[tuple], list[str]]:
+    """
+    Build an efficient internal ``param_to_model`` callback from declarative
+    ``calib_params``.
+
+    Returns
+    -------
+    param_to_model : callable
+        ``(params_array) -> (model, spec)``
+    initial_params : np.ndarray
+        Concatenated initial values.
+    bounds : list of tuple
+        Concatenated bounds.
+    param_names : list of str
+        Human-readable names (same order as array).
+    """
+    model_params: list[ModelParam] = []
+    regime_params: list[RegimeParam] = []
+    shock_params: list[ShockParam] = []
+
+    for p in calib_params:
+        if isinstance(p, ModelParam):
+            model_params.append(p)
+        elif isinstance(p, RegimeParam):
+            regime_params.append(p)
+        elif isinstance(p, ShockParam):
+            shock_params.append(p)
+        else:
+            raise TypeError(f"Unknown calib_param type: {type(p)}")
+
+    if len(calib_params) == 0:
+        raise ValueError("calib_params must not be empty")
+
+    # Validate names against model
+    for mp in model_params:
+        if mp.name not in model.params:
+            raise ValueError(
+                f"ModelParam name '{mp.name}' not found in model.params. "
+                f"Available: {sorted(model.params.keys())}"
+            )
+    for sp in shock_params:
+        if sp.name not in model.exog_list:
+            raise ValueError(
+                f"ShockParam name '{sp.name}' not found in model.exog_list. "
+                f"Available: {model.exog_list}"
+            )
+
+    # LinearSpec-specific validation
+    if isinstance(template_spec, LinearSpec):
+        if len(shock_params) > 1:
+            raise ValueError(
+                "LinearSpec supports at most one ShockParam, "
+                f"got {len(shock_params)}"
+            )
+        if len(regime_params) > 0:
+            raise ValueError("LinearSpec does not support RegimeParam")
+
+    # Layout: [model_params..., regime_params..., shock_params...]
+    n_mp = len(model_params)
+    n_rp = len(regime_params)
+
+    initial = np.array(
+        [p.initial for p in model_params]
+        + [p.initial for p in regime_params]
+        + [p.initial for p in shock_params]
+    )
+    bounds = (
+        [p.bounds for p in model_params]
+        + [p.bounds for p in regime_params]
+        + [p.bounds for p in shock_params]
+    )
+
+    # Build human-readable names
+    param_names: list[str] = []
+    for mp in model_params:
+        param_names.append(mp.name)
+    for rp in regime_params:
+        regime_str = (
+            f"r{rp.regime[0]}"
+            if len(rp.regime) == 1
+            else "r" + "_".join(str(r) for r in rp.regime)
+        )
+        param_names.append(f"regime_{rp.name}_{regime_str}")
+    for sp in shock_params:
+        param_names.append(f"shock_{sp.name}_r{sp.regime}_t{sp.period}")
+
+    # Caching closure
+    _cache: dict[str, Any] = {
+        "model": None,
+        "model_param_vals": None,
+    }
+
+    # If no model params, solve the base model once
+    if n_mp == 0:
+        # Ensure base model is solved and linearised
+        if not getattr(model, "_linearized", False):
+            model.solve_steady(calibrate=False, display=False)
+            model.linearize()
+        _cache["model"] = model
+
+    def param_to_model(params: np.ndarray) -> tuple:
+        params = np.atleast_1d(params)
+        mp_vals = params[:n_mp]
+        rp_vals = params[n_mp : n_mp + n_rp]
+        sp_vals = params[n_mp + n_rp :]
+
+        # --- Model (re)solve ---
+        if n_mp > 0:
+            cached_vals = _cache["model_param_vals"]
+            if cached_vals is None or not np.array_equal(mp_vals, cached_vals):
+                param_dict = {mp.name: float(v) for mp, v in zip(model_params, mp_vals)}
+                new_model = model.update_copy(params=param_dict)
+                new_model.solve_steady(calibrate=False, display=False)
+                new_model.linearize()
+                _cache["model"] = new_model
+                _cache["model_param_vals"] = mp_vals.copy()
+            mod = _cache["model"]
+        else:
+            mod = _cache["model"]
+
+        # --- Spec ---
+        spec = _build_spec(template_spec, regime_params, shock_params, rp_vals, sp_vals)
+
+        return mod, spec
+
+    return param_to_model, initial, bounds, param_names
+
+
 def calibrate(
     model,
     targets: List[Union[PointTarget, FunctionalTarget]],
-    param_to_model: Callable[[np.ndarray], tuple],
-    initial_params: np.ndarray,
+    calib_params: list[Union[ModelParam, ShockParam, RegimeParam]],
     solver: str = "deterministic",
-    spec: Optional[Union[DetSpec, LinearSpec]] = None,
+    spec: Union[DetSpec, LinearSpec] = None,
     bounds: Optional[List[tuple]] = None,
     method: Optional[str] = None,
     tol: float = 1e-6,
@@ -187,10 +514,10 @@ def calibrate(
     """
     Unified calibration function for fitting parameters to target outcomes.
 
-    This function provides a flexible interface for calibrating model parameters
-    and/or shocks to match specified target outcomes. It automatically dispatches
-    to the appropriate solver and uses special-case logic for scalar/vector and
-    just-identified/over-identified problems.
+    Uses declarative parameter specifications (``ModelParam``, ``ShockParam``,
+    ``RegimeParam``) to automatically build an efficient internal callback with
+    model-level caching. Only ``ModelParam`` changes trigger model re-solving;
+    ``ShockParam`` and ``RegimeParam`` changes only modify the spec.
 
     Parameters
     ----------
@@ -198,56 +525,20 @@ def calibrate(
         Base model instance to calibrate.
     targets : list of PointTarget or FunctionalTarget
         Target specifications to match.
-    param_to_model : callable
-        Function that takes parameter array and returns (model, spec) tuple.
-        The spec should be appropriate for the chosen solver:
-        - For deterministic/linear_sequence: DetSpec with Nt set
-        - For linear_irf: LinearSpec with shock_name, shock_size, and Nt
-
-        Example for deterministic/linear_sequence::
-
-            def param_to_model(params):
-                # params = [tau, shock_size]
-                new_model = model.update_copy(params={"tau": params[0]})
-                new_model.solve_steady(calibrate=False)
-                new_model.linearize()
-
-                spec = DetSpec(Nt=50)
-                spec.add_regime(0)
-                spec.add_shock(0, "z_tfp", per=0, val=params[1])
-
-                return new_model, spec
-
-        Example for linear_irf::
-
-            def param_to_model(params):
-                new_model = model.update_copy(params={"shock_size": params[0]})
-                new_model.solve_steady(calibrate=False)
-                new_model.linearize()
-
-                spec = LinearSpec(
-                    shock_name="Z_til",
-                    shock_size=params[0],
-                    Nt=50
-                )
-
-                return new_model, spec
-
-    initial_params : array-like
-        Initial parameter values for optimization.
+    calib_params : list of ModelParam, ShockParam, or RegimeParam
+        Declarative parameter specifications. Array layout:
+        ``[...model_params, ...regime_params, ...shock_params]``.
     solver : str, default "deterministic"
         Solver to use: "deterministic", "linear_irf", or "linear_sequence".
-    spec : DetSpec or LinearSpec, optional
-        Specification object for solver. If provided, overrides spec from
-        param_to_model. Must include Nt:
-        - For deterministic/linear_sequence: DetSpec with Nt attribute
-        - For linear_irf: LinearSpec with shock_name, shock_size, and Nt
+    spec : DetSpec or LinearSpec
+        Template specification. For deterministic/linear_sequence: ``DetSpec``.
+        For linear_irf: ``LinearSpec``. Shock values from ``ShockParam`` and
+        regime overrides from ``RegimeParam`` are applied on top of this template.
     bounds : list of tuples, optional
-        Parameter bounds for optimization. Each tuple is (lower, upper).
+        Parameter bounds. If None, uses bounds from ``calib_params``.
     method : str, optional
         Optimization method. If None, automatically selected based on problem
-        structure. Options include 'hybr', 'lm' (for root finding), 'L-BFGS-B',
-        'Nelder-Mead' (for minimization).
+        structure.
     tol : float, default 1e-6
         Convergence tolerance.
     maxiter : int, default 100
@@ -260,61 +551,61 @@ def calibrate(
     CalibrationResult
         Result object with fitted parameters, diagnostics, and solution.
 
-    Raises
-    ------
-    ValueError
-        If the problem is under-identified (more parameters than targets).
-
-    Notes
-    -----
-    The function automatically selects the appropriate optimization method based
-    on the problem structure:
-
-    - **Just-identified (n_params == n_targets)**:
-        - Scalar (n_params == 1): Uses `scipy.optimize.root_scalar`
-        - Vector (n_params > 1): Uses `scipy.optimize.root`
-
-    - **Over-identified (n_params < n_targets)**:
-        - Scalar (n_params == 1): Uses `scipy.optimize.minimize_scalar`
-        - Vector (n_params > 1): Uses `scipy.optimize.minimize`
-
     Examples
     --------
-    >>> # Deterministic path calibration
-    >>> from equilibrium.solvers.calibration import calibrate, PointTarget
-    >>> from equilibrium.solvers.det_spec import DetSpec
-    >>>
-    >>> # Define parameter mapping
-    >>> def param_to_model(params):
-    ...     mod = base_model.update_copy(params={"beta": params[0]})
-    ...     mod.solve_steady(calibrate=False)
-    ...     mod.linearize()
-    ...     spec = DetSpec(Nt=50)
-    ...     spec.add_regime(0)
-    ...     return mod, spec
-    >>>
-    >>> # Define target
-    >>> targets = [PointTarget(variable="consumption", time=10, value=1.05)]
-    >>>
-    >>> # Calibrate
+    >>> # Calibrate a shock size using linear IRF
     >>> result = calibrate(
     ...     model=base_model,
-    ...     targets=targets,
-    ...     param_to_model=param_to_model,
-    ...     initial_params=np.array([0.96]),
-    ...     solver="deterministic",
+    ...     targets=[PointTarget(variable="I", time=5, value=0.01)],
+    ...     calib_params=[ShockParam("Z_til", initial=0.005, bounds=(0.001, 0.1))],
+    ...     solver="linear_irf",
+    ...     spec=LinearSpec(shock_name="Z_til", shock_size=0.01, Nt=50),
     ... )
-    >>> print(f"Fitted beta: {result.parameters['beta']}")
-    >>> print(f"Success: {result.success}")
+
+    >>> # Calibrate a model parameter with deterministic solver
+    >>> result = calibrate(
+    ...     model=base_model,
+    ...     targets=[PointTarget(variable="I", time=10, value=0.55)],
+    ...     calib_params=[ModelParam("bet", initial=0.95, bounds=(0.90, 0.99))],
+    ...     solver="deterministic",
+    ...     spec=spec,
+    ... )
+
+    >>> # Mixed: model param + shock param
+    >>> result = calibrate(
+    ...     model=base_model,
+    ...     targets=[
+    ...         PointTarget(variable="I", time=10, value=0.55),
+    ...         PointTarget(variable="I", time=20, value=0.56),
+    ...     ],
+    ...     calib_params=[
+    ...         ModelParam("bet", initial=0.95, bounds=(0.90, 0.99)),
+    ...         ShockParam("Z_til", initial=0.01, bounds=(0.0, 0.1)),
+    ...     ],
+    ...     solver="deterministic",
+    ...     spec=spec,
+    ... )
     """
     # Validate inputs
     if len(targets) == 0:
         raise ValueError("At least one target must be specified")
 
+    if spec is None:
+        raise ValueError("spec is required (DetSpec or LinearSpec)")
+
     # Validate solver choice
     valid_solvers = ["deterministic", "linear_irf", "linear_sequence"]
     if solver not in valid_solvers:
         raise ValueError(f"Unknown solver: {solver}. Must be one of {valid_solvers}.")
+
+    # Build internal callback from declarative calib_params
+    param_to_model, initial_params, auto_bounds, param_names = _build_param_to_model(
+        model, calib_params, spec
+    )
+
+    # Use auto-bounds from calib_params if user didn't pass explicit bounds
+    if bounds is None:
+        bounds = auto_bounds
 
     n_params = len(initial_params)
 
@@ -338,31 +629,27 @@ def calibrate(
     is_scalar = n_params == 1
 
     # Test evaluation to determine actual number of targets
-    # First, extract Nt from spec
     try:
         test_mod, test_spec = param_to_model(initial_params)
-        spec_to_use_test = spec if spec is not None else test_spec
 
         # Extract Nt from the spec
-        if isinstance(spec_to_use_test, DetSpec):
-            Nt = spec_to_use_test.Nt
-        elif isinstance(spec_to_use_test, LinearSpec):
-            Nt = spec_to_use_test.Nt
+        if isinstance(test_spec, DetSpec):
+            Nt = test_spec.Nt
+        elif isinstance(test_spec, LinearSpec):
+            Nt = test_spec.Nt
         else:
             raise ValueError(
                 "spec must be DetSpec or LinearSpec with Nt attribute. "
-                f"Got {type(spec_to_use_test)}"
+                f"Got {type(test_spec)}"
             )
 
         # Quick solve to get dimensionality
         if solver == "linear_irf":
-            test_solution = _compute_irf_from_linear_model(test_mod, spec_to_use_test)
+            test_solution = _compute_irf_from_linear_model(test_mod, test_spec)
         elif solver == "linear_sequence":
             from .linear import solve_sequence_linear
 
-            seq_result = solve_sequence_linear(
-                spec_to_use_test, test_mod, Nt, **solver_kwargs
-            )
+            seq_result = solve_sequence_linear(test_spec, test_mod, Nt, **solver_kwargs)
             test_solution = (
                 seq_result.splice(Nt)
                 if seq_result.n_regimes > 1
@@ -371,9 +658,9 @@ def calibrate(
         else:  # deterministic
             from .deterministic import solve, solve_sequence
 
-            if isinstance(spec_to_use_test, DetSpec):
+            if isinstance(test_spec, DetSpec):
                 seq_result = solve_sequence(
-                    spec_to_use_test,
+                    test_spec,
                     test_mod,
                     Nt,
                     tol=solver_kwargs.get("tol", 1e-8),
@@ -403,7 +690,8 @@ def calibrate(
 
     except Exception as e:
         logger.warning(
-            "Could not determine target dimensionality from test evaluation: %s. Assuming minimal targets.",
+            "Could not determine target dimensionality from test evaluation: "
+            "%s. Assuming minimal targets.",
             str(e),
         )
         n_targets = min_targets
@@ -429,24 +717,6 @@ def calibrate(
     def _solve_and_evaluate(params, return_weights=False):
         """
         Compute target errors (and optionally weights) for given parameters.
-
-        This is the core evaluation function used by both root-finding and
-        minimization methods.
-
-        Parameters
-        ----------
-        params : array-like
-            Parameter values to evaluate.
-        return_weights : bool, default False
-            If True, return (errors, weights) tuple for weighted minimization.
-            If False, return only errors for root-finding.
-
-        Returns
-        -------
-        errors : array or float
-            Target errors. Scalar if is_scalar and single target.
-        weights : array, optional
-            Target weights. Only returned if return_weights=True.
         """
         params = np.atleast_1d(params)
 
@@ -454,14 +724,11 @@ def calibrate(
             # Get model and spec from parameters
             mod, spec_from_params = param_to_model(params)
 
-            # Use provided spec if available, otherwise use from param_to_model
-            spec_to_use = spec if spec is not None else spec_from_params
-
             # Extract Nt from the spec
-            if isinstance(spec_to_use, DetSpec):
-                Nt_local = spec_to_use.Nt
-            elif isinstance(spec_to_use, LinearSpec):
-                Nt_local = spec_to_use.Nt
+            if isinstance(spec_from_params, DetSpec):
+                Nt_local = spec_from_params.Nt
+            elif isinstance(spec_from_params, LinearSpec):
+                Nt_local = spec_from_params.Nt
             else:
                 raise ValueError("spec must be DetSpec or LinearSpec with Nt attribute")
 
@@ -469,10 +736,10 @@ def calibrate(
             if solver == "deterministic":
                 from .deterministic import solve, solve_sequence
 
-                if isinstance(spec_to_use, DetSpec):
+                if isinstance(spec_from_params, DetSpec):
                     # Use sequence solver if DetSpec provided
                     seq_result = solve_sequence(
-                        spec_to_use,
+                        spec_from_params,
                         mod,
                         Nt_local,
                         tol=solver_kwargs.get("tol", 1e-8),
@@ -500,18 +767,18 @@ def calibrate(
 
             elif solver == "linear_irf":
                 # Compute IRF using existing LinearModel machinery
-                solution = _compute_irf_from_linear_model(mod, spec_to_use)
+                solution = _compute_irf_from_linear_model(mod, spec_from_params)
 
             elif solver == "linear_sequence":
                 from .linear import solve_sequence_linear
 
-                if not isinstance(spec_to_use, DetSpec):
+                if not isinstance(spec_from_params, DetSpec):
                     raise ValueError(
                         "linear_sequence solver requires DetSpec specification"
                     )
 
                 seq_result = solve_sequence_linear(
-                    spec_to_use,
+                    spec_from_params,
                     mod,
                     Nt_local,
                     **solver_kwargs,
@@ -575,33 +842,47 @@ def calibrate(
         if is_scalar:
             # Scalar minimization
             result = _solve_scalar_minimize(
-                objective_with_weights, initial_params[0], bounds, method, tol, maxiter
+                objective_with_weights,
+                initial_params[0],
+                bounds,
+                method,
+                tol,
+                maxiter,
             )
         else:
             # Vector minimization
             result = _solve_vector_minimize(
-                objective_with_weights, initial_params, bounds, method, tol, maxiter
+                objective_with_weights,
+                initial_params,
+                bounds,
+                method,
+                tol,
+                maxiter,
             )
+
+    # Post-process: replace generic param names with descriptive names
+    result.parameters = {
+        name: float(val) for name, val in zip(param_names, result.parameters_array)
+    }
 
     # Extract final solution using the same unified evaluation function
     try:
         final_model, final_spec = param_to_model(result.parameters_array)
-        spec_to_use = spec if spec is not None else final_spec
 
         # Extract Nt from the spec
-        if isinstance(spec_to_use, DetSpec):
-            Nt_final = spec_to_use.Nt
-        elif isinstance(spec_to_use, LinearSpec):
-            Nt_final = spec_to_use.Nt
+        if isinstance(final_spec, DetSpec):
+            Nt_final = final_spec.Nt
+        elif isinstance(final_spec, LinearSpec):
+            Nt_final = final_spec.Nt
         else:
             raise ValueError("spec must be DetSpec or LinearSpec with Nt attribute")
 
         if solver == "deterministic":
             from .deterministic import solve, solve_sequence
 
-            if isinstance(spec_to_use, DetSpec):
+            if isinstance(final_spec, DetSpec):
                 seq_result = solve_sequence(
-                    spec_to_use,
+                    final_spec,
                     final_model,
                     Nt_final,
                     tol=solver_kwargs.get("tol", 1e-8),
@@ -627,13 +908,13 @@ def calibrate(
                 )
 
         elif solver == "linear_irf":
-            final_solution = _compute_irf_from_linear_model(final_model, spec_to_use)
+            final_solution = _compute_irf_from_linear_model(final_model, final_spec)
 
         elif solver == "linear_sequence":
             from .linear import solve_sequence_linear
 
             seq_result = solve_sequence_linear(
-                spec_to_use,
+                final_spec,
                 final_model,
                 Nt_final,
                 **solver_kwargs,

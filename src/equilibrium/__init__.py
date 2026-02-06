@@ -23,7 +23,10 @@ from .plot.plot import (  # noqa: E402
 from .solvers.calibration import (  # noqa: E402
     CalibrationResult,
     FunctionalTarget,
+    ModelParam,
     PointTarget,
+    RegimeParam,
+    ShockParam,
     calibrate,
 )
 from .solvers.det_spec import DetSpec  # noqa: E402
@@ -76,4 +79,7 @@ __all__: list[str] = [
     "CalibrationResult",
     "PointTarget",
     "FunctionalTarget",
+    "ModelParam",
+    "ShockParam",
+    "RegimeParam",
 ]

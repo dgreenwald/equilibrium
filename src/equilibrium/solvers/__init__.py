@@ -9,7 +9,10 @@ calibration interface.
 from .calibration import (
     CalibrationResult,
     FunctionalTarget,
+    ModelParam,
     PointTarget,
+    RegimeParam,
+    ShockParam,
     calibrate,
 )
 from .det_spec import DetSpec
@@ -26,4 +29,7 @@ __all__ = [
     "CalibrationResult",
     "PointTarget",
     "FunctionalTarget",
+    "ModelParam",
+    "ShockParam",
+    "RegimeParam",
 ]
