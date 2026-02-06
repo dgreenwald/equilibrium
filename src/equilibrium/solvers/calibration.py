@@ -17,17 +17,45 @@ from __future__ import annotations
 
 import copy
 import logging
+from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Mapping, Optional, Union
 
 import numpy as np
 import scipy.optimize as opt
 
 from .det_spec import DetSpec
 from .linear_spec import LinearSpec
-from .results import DeterministicResult, IrfResult, PathResult, SequenceResult
+from .results import (
+    DeterministicResult,
+    IrfResult,
+    PathResult,
+    SequenceResult,
+    SeriesTransform,
+)
 
 logger = logging.getLogger(__name__)
+
+
+@contextmanager
+def _suppress_solver_output(enabled: bool):
+    if not enabled:
+        yield
+        return
+    loggers = [
+        logging.getLogger("equilibrium.solvers.deterministic"),
+        logging.getLogger("equilibrium.solvers.linear"),
+        logging.getLogger("equilibrium.model.model"),
+        logging.getLogger("equilibrium.solvers.newton"),
+    ]
+    previous_levels = [(lg, lg.level) for lg in loggers]
+    try:
+        for lg in loggers:
+            lg.setLevel(logging.WARNING)
+        yield
+    finally:
+        for lg, level in previous_levels:
+            lg.setLevel(level)
 
 
 @dataclass
@@ -371,6 +399,7 @@ def _build_param_to_model(
     model,
     calib_params: list[Union[ModelParam, ShockParam, RegimeParam]],
     template_spec: Union[DetSpec, LinearSpec],
+    suppress_solver_output: bool,
 ) -> tuple[Callable, np.ndarray, list[tuple], list[str]]:
     """
     Build an efficient internal ``param_to_model`` callback from declarative
@@ -467,8 +496,9 @@ def _build_param_to_model(
     if n_mp == 0:
         # Ensure base model is solved and linearised
         if not getattr(model, "_linearized", False):
-            model.solve_steady(calibrate=False, display=False)
-            model.linearize()
+            with _suppress_solver_output(suppress_solver_output):
+                model.solve_steady(calibrate=False, display=False)
+                model.linearize()
         _cache["model"] = model
 
     def param_to_model(params: np.ndarray) -> tuple:
@@ -483,8 +513,9 @@ def _build_param_to_model(
             if cached_vals is None or not np.array_equal(mp_vals, cached_vals):
                 param_dict = {mp.name: float(v) for mp, v in zip(model_params, mp_vals)}
                 new_model = model.update_copy(params=param_dict)
-                new_model.solve_steady(calibrate=False, display=False)
-                new_model.linearize()
+                with _suppress_solver_output(suppress_solver_output):
+                    new_model.solve_steady(calibrate=False, display=False)
+                    new_model.linearize()
                 _cache["model"] = new_model
                 _cache["model_param_vals"] = mp_vals.copy()
             mod = _cache["model"]
@@ -509,6 +540,13 @@ def calibrate(
     method: Optional[str] = None,
     tol: float = 1e-6,
     maxiter: int = 100,
+    suppress_solver_output: bool = True,
+    series_transforms: Optional[
+        Mapping[str, SeriesTransform | Mapping[str, Any]]
+    ] = None,
+    default_transform: Optional[SeriesTransform | Mapping[str, Any]] = None,
+    return_solution: bool = False,
+    progress_every: int = 1,
     **solver_kwargs,
 ) -> CalibrationResult:
     """
@@ -543,6 +581,21 @@ def calibrate(
         Convergence tolerance.
     maxiter : int, default 100
         Maximum number of iterations.
+    suppress_solver_output : bool, default True
+        If True, suppress logging from steady-state, deterministic, and linear
+        solvers during calibration evaluations.
+    series_transforms : dict[str, SeriesTransform or dict], optional
+        Per-series transform specifications keyed by series name. Applied to
+        solution data before evaluating targets. The transform base_index
+        refers to the time index in the solved path (t=0 is the initial
+        condition).
+    default_transform : SeriesTransform or dict, optional
+        Transform to apply to any series without an explicit entry in
+        series_transforms.
+    return_solution : bool, default False
+        If True, return the (transformed) solution and model in the result.
+    progress_every : int, default 1
+        Log calibration progress every N evaluations. Set to 0 to disable.
     **solver_kwargs
         Additional keyword arguments passed to the solver.
 
@@ -600,7 +653,7 @@ def calibrate(
 
     # Build internal callback from declarative calib_params
     param_to_model, initial_params, auto_bounds, param_names = _build_param_to_model(
-        model, calib_params, spec
+        model, calib_params, spec, suppress_solver_output
     )
 
     # Use auto-bounds from calib_params if user didn't pass explicit bounds
@@ -628,6 +681,14 @@ def calibrate(
     # We need to evaluate targets once to know the true dimensionality
     is_scalar = n_params == 1
 
+    def _apply_transforms(solution: PathResult) -> PathResult:
+        if series_transforms is None and default_transform is None:
+            return solution
+        return solution.transform(
+            series_transforms=series_transforms,
+            default_transform=default_transform,
+        )
+
     # Test evaluation to determine actual number of targets
     try:
         test_mod, test_spec = param_to_model(initial_params)
@@ -644,47 +705,51 @@ def calibrate(
             )
 
         # Quick solve to get dimensionality
-        if solver == "linear_irf":
-            test_solution = _compute_irf_from_linear_model(test_mod, test_spec)
-        elif solver == "linear_sequence":
-            from .linear import solve_sequence_linear
+        with _suppress_solver_output(suppress_solver_output):
+            if solver == "linear_irf":
+                test_solution = _compute_irf_from_linear_model(test_mod, test_spec)
+            elif solver == "linear_sequence":
+                from .linear import solve_sequence_linear
 
-            seq_result = solve_sequence_linear(test_spec, test_mod, Nt, **solver_kwargs)
-            test_solution = (
-                seq_result.splice(Nt)
-                if seq_result.n_regimes > 1
-                else seq_result.regimes[0]
-            )
-        else:  # deterministic
-            from .deterministic import solve, solve_sequence
-
-            if isinstance(test_spec, DetSpec):
-                seq_result = solve_sequence(
-                    test_spec,
-                    test_mod,
-                    Nt,
-                    tol=solver_kwargs.get("tol", 1e-8),
-                    save_results=False,
-                    **{
-                        k: v
-                        for k, v in solver_kwargs.items()
-                        if k not in {"tol", "save_results"}
-                    },
+                seq_result = solve_sequence_linear(
+                    test_spec, test_mod, Nt, **solver_kwargs
                 )
                 test_solution = (
                     seq_result.splice(Nt)
                     if seq_result.n_regimes > 1
                     else seq_result.regimes[0]
                 )
-            else:
-                Z_path = np.zeros((Nt, len(test_mod.exog_list)))
-                test_solution = solve(
-                    test_mod,
-                    Z_path,
-                    tol=solver_kwargs.get("tol", 1e-8),
-                    **{k: v for k, v in solver_kwargs.items() if k != "tol"},
-                )
+            else:  # deterministic
+                from .deterministic import solve, solve_sequence
 
+                if isinstance(test_spec, DetSpec):
+                    seq_result = solve_sequence(
+                        test_spec,
+                        test_mod,
+                        Nt,
+                        tol=solver_kwargs.get("tol", 1e-8),
+                        save_results=False,
+                        **{
+                            k: v
+                            for k, v in solver_kwargs.items()
+                            if k not in {"tol", "save_results"}
+                        },
+                    )
+                    test_solution = (
+                        seq_result.splice(Nt)
+                        if seq_result.n_regimes > 1
+                        else seq_result.regimes[0]
+                    )
+                else:
+                    Z_path = np.zeros((Nt, len(test_mod.exog_list)))
+                    test_solution = solve(
+                        test_mod,
+                        Z_path,
+                        tol=solver_kwargs.get("tol", 1e-8),
+                        **{k: v for k, v in solver_kwargs.items() if k != "tol"},
+                    )
+
+        test_solution = _apply_transforms(test_solution)
         test_errors, _ = _evaluate_targets(targets, test_solution)
         n_targets = len(test_errors)
 
@@ -713,6 +778,8 @@ def calibrate(
         "scalar" if is_scalar else "vector",
     )
 
+    eval_count = 0
+
     # Build unified objective function
     def _solve_and_evaluate(params, return_weights=False):
         """
@@ -733,70 +800,91 @@ def calibrate(
                 raise ValueError("spec must be DetSpec or LinearSpec with Nt attribute")
 
             # Solve using specified solver
-            if solver == "deterministic":
-                from .deterministic import solve, solve_sequence
+            with _suppress_solver_output(suppress_solver_output):
+                if solver == "deterministic":
+                    from .deterministic import solve, solve_sequence
 
-                if isinstance(spec_from_params, DetSpec):
-                    # Use sequence solver if DetSpec provided
-                    seq_result = solve_sequence(
+                    if isinstance(spec_from_params, DetSpec):
+                        # Use sequence solver if DetSpec provided
+                        seq_result = solve_sequence(
+                            spec_from_params,
+                            mod,
+                            Nt_local,
+                            tol=solver_kwargs.get("tol", 1e-8),
+                            save_results=False,
+                            **{
+                                k: v
+                                for k, v in solver_kwargs.items()
+                                if k not in {"tol", "save_results"}
+                            },
+                        )
+                        solution = (
+                            seq_result.splice(Nt_local)
+                            if seq_result.n_regimes > 1
+                            else seq_result.regimes[0]
+                        )
+                    else:
+                        # Simple deterministic solve
+                        Z_path = np.zeros((Nt_local, len(mod.exog_list)))
+                        solution = solve(
+                            mod,
+                            Z_path,
+                            tol=solver_kwargs.get("tol", 1e-8),
+                            **{k: v for k, v in solver_kwargs.items() if k != "tol"},
+                        )
+
+                elif solver == "linear_irf":
+                    # Compute IRF using existing LinearModel machinery
+                    solution = _compute_irf_from_linear_model(mod, spec_from_params)
+
+                elif solver == "linear_sequence":
+                    from .linear import solve_sequence_linear
+
+                    if not isinstance(spec_from_params, DetSpec):
+                        raise ValueError(
+                            "linear_sequence solver requires DetSpec specification"
+                        )
+
+                    seq_result = solve_sequence_linear(
                         spec_from_params,
                         mod,
                         Nt_local,
-                        tol=solver_kwargs.get("tol", 1e-8),
-                        save_results=False,
-                        **{
-                            k: v
-                            for k, v in solver_kwargs.items()
-                            if k not in {"tol", "save_results"}
-                        },
+                        **solver_kwargs,
                     )
                     solution = (
                         seq_result.splice(Nt_local)
                         if seq_result.n_regimes > 1
                         else seq_result.regimes[0]
                     )
+
                 else:
-                    # Simple deterministic solve
-                    Z_path = np.zeros((Nt_local, len(mod.exog_list)))
-                    solution = solve(
-                        mod,
-                        Z_path,
-                        tol=solver_kwargs.get("tol", 1e-8),
-                        **{k: v for k, v in solver_kwargs.items() if k != "tol"},
-                    )
-
-            elif solver == "linear_irf":
-                # Compute IRF using existing LinearModel machinery
-                solution = _compute_irf_from_linear_model(mod, spec_from_params)
-
-            elif solver == "linear_sequence":
-                from .linear import solve_sequence_linear
-
-                if not isinstance(spec_from_params, DetSpec):
                     raise ValueError(
-                        "linear_sequence solver requires DetSpec specification"
+                        f"Unknown solver: {solver}. Must be 'deterministic', "
+                        "'linear_irf', or 'linear_sequence'."
                     )
-
-                seq_result = solve_sequence_linear(
-                    spec_from_params,
-                    mod,
-                    Nt_local,
-                    **solver_kwargs,
-                )
-                solution = (
-                    seq_result.splice(Nt_local)
-                    if seq_result.n_regimes > 1
-                    else seq_result.regimes[0]
-                )
-
-            else:
-                raise ValueError(
-                    f"Unknown solver: {solver}. Must be 'deterministic', "
-                    "'linear_irf', or 'linear_sequence'."
-                )
 
             # Evaluate targets - returns both errors and weights
-            errors, target_weights = _evaluate_targets(targets, solution)
+            transformed_solution = _apply_transforms(solution)
+            errors, target_weights = _evaluate_targets(targets, transformed_solution)
+
+            nonlocal eval_count
+            eval_count += 1
+            if progress_every and eval_count % progress_every == 0:
+                params_array = np.atleast_1d(params)
+                params_dict = {
+                    name: float(val)
+                    for name, val in zip(param_names, params_array, strict=False)
+                }
+                residual = np.linalg.norm(errors)
+                if return_weights:
+                    weighted_errors = target_weights * (np.asarray(errors) ** 2)
+                    residual = float(np.sqrt(np.sum(weighted_errors)))
+                logger.info(
+                    "Calibration eval %d: params=%s residual=%g",
+                    eval_count,
+                    params_dict,
+                    residual,
+                )
 
             # Return based on what's requested
             if return_weights:
@@ -877,56 +965,63 @@ def calibrate(
         else:
             raise ValueError("spec must be DetSpec or LinearSpec with Nt attribute")
 
-        if solver == "deterministic":
-            from .deterministic import solve, solve_sequence
+        if return_solution:
+            with _suppress_solver_output(suppress_solver_output):
+                if solver == "deterministic":
+                    from .deterministic import solve, solve_sequence
 
-            if isinstance(final_spec, DetSpec):
-                seq_result = solve_sequence(
-                    final_spec,
-                    final_model,
-                    Nt_final,
-                    tol=solver_kwargs.get("tol", 1e-8),
-                    save_results=False,
-                    **{
-                        k: v
-                        for k, v in solver_kwargs.items()
-                        if k not in {"tol", "save_results"}
-                    },
-                )
-                final_solution = (
-                    seq_result.splice(Nt_final)
-                    if seq_result.n_regimes > 1
-                    else seq_result.regimes[0]
-                )
-            else:
-                Z_path = np.zeros((Nt_final, len(final_model.exog_list)))
-                final_solution = solve(
-                    final_model,
-                    Z_path,
-                    tol=solver_kwargs.get("tol", 1e-8),
-                    **{k: v for k, v in solver_kwargs.items() if k != "tol"},
-                )
+                    if isinstance(final_spec, DetSpec):
+                        seq_result = solve_sequence(
+                            final_spec,
+                            final_model,
+                            Nt_final,
+                            tol=solver_kwargs.get("tol", 1e-8),
+                            save_results=False,
+                            **{
+                                k: v
+                                for k, v in solver_kwargs.items()
+                                if k not in {"tol", "save_results"}
+                            },
+                        )
+                        final_solution = (
+                            seq_result.splice(Nt_final)
+                            if seq_result.n_regimes > 1
+                            else seq_result.regimes[0]
+                        )
+                    else:
+                        Z_path = np.zeros((Nt_final, len(final_model.exog_list)))
+                        final_solution = solve(
+                            final_model,
+                            Z_path,
+                            tol=solver_kwargs.get("tol", 1e-8),
+                            **{k: v for k, v in solver_kwargs.items() if k != "tol"},
+                        )
 
-        elif solver == "linear_irf":
-            final_solution = _compute_irf_from_linear_model(final_model, final_spec)
+                elif solver == "linear_irf":
+                    final_solution = _compute_irf_from_linear_model(
+                        final_model, final_spec
+                    )
 
-        elif solver == "linear_sequence":
-            from .linear import solve_sequence_linear
+                elif solver == "linear_sequence":
+                    from .linear import solve_sequence_linear
 
-            seq_result = solve_sequence_linear(
-                final_spec,
-                final_model,
-                Nt_final,
-                **solver_kwargs,
-            )
-            final_solution = (
-                seq_result.splice(Nt_final)
-                if seq_result.n_regimes > 1
-                else seq_result.regimes[0]
-            )
+                    seq_result = solve_sequence_linear(
+                        final_spec,
+                        final_model,
+                        Nt_final,
+                        **solver_kwargs,
+                    )
+                    final_solution = (
+                        seq_result.splice(Nt_final)
+                        if seq_result.n_regimes > 1
+                        else seq_result.regimes[0]
+                    )
 
-        result.solution = final_solution
-        result.model = final_model
+            result.solution = _apply_transforms(final_solution)
+            result.model = final_model
+        else:
+            result.solution = None
+            result.model = None
 
     except Exception as e:
         logger.error("Error computing final solution: %s", str(e))
