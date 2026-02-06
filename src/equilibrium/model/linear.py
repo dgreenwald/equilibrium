@@ -1,8 +1,13 @@
+from __future__ import annotations
+
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import numpy as np
+
+if TYPE_CHECKING:
+    from ..solvers.results import IrfResult
 
 from ..solvers import perturb
 
@@ -314,7 +319,7 @@ class LinearModel:
 
         return s_sim
 
-    def get_irf_dict(self) -> dict[str, "IrfResult"]:
+    def get_irf_dict(self) -> dict[str, IrfResult]:
         """
         Return cached IrfResult dict if available, otherwise build and cache it.
 
