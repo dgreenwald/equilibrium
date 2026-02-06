@@ -17,6 +17,7 @@ from equilibrium.plot import (
     PlotSpec,
     overlay_to_result,
     plot_deterministic_results,
+    plot_irf_results,
     plot_model_irfs,
 )
 from equilibrium.settings import get_settings
@@ -963,6 +964,30 @@ class TestPlotModelIrfs:
         # Clean up the created files
         for path in paths:
             path.unlink()
+
+    def test_plot_paths_print_periods(self, capsys):
+        """Test that plot_paths prints tables for requested periods."""
+        mod = set_model()
+        mod.solve_steady(calibrate=True)
+        mod.linearize()
+        irf_dict = mod.compute_linear_irfs(5)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            paths = plot_irf_results(
+                irf_dict,
+                include_list=["I", "log_K"],
+                plot_dir=tmpdir,
+                print_periods=[0, 2],
+                print_vars=["I"],
+            )
+
+            assert len(paths) > 0
+
+        captured = capsys.readouterr()
+        assert "Values at period 0" in captured.out
+        assert "Values at period 2" in captured.out
+        assert "Variable" in captured.out
+        assert "I" in captured.out
 
     def test_plot_default_title_and_prefix(self):
         """Test that title_str and prefix have correct defaults based on shock."""

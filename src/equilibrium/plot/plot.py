@@ -19,6 +19,7 @@ from typing import (
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.ticker import MaxNLocator
+from tabulate import tabulate
 
 if TYPE_CHECKING:
     from ..model.model import Model
@@ -145,6 +146,8 @@ def plot_paths(
     var_in_title: bool = False,
     clear_previous: bool = True,
     announce_dir: bool = True,
+    print_periods: Optional[Sequence[int]] = None,
+    print_vars: Optional[Sequence[str]] = None,
 ) -> List[Path]:
     """
     Plot time-series paths by variable, optionally grouped with confidence bands.
@@ -198,6 +201,11 @@ def plot_paths(
         pages.
     announce_dir : bool, default True
         Whether to print the output directory when rendering plots.
+    print_periods : Sequence[int], optional
+        Time indices to print a values table for. Periods are zero-based indices
+        into the path array (before any custom ``grid`` transformation).
+    print_vars : Sequence[str], optional
+        Variables to include in the printed tables. Defaults to ``include_list``.
 
     Returns
     -------
@@ -287,6 +295,41 @@ def plot_paths(
     group_index = {}
     if group_names is not None:
         group_index = {g: group_names.index(g) for g in group_names}
+
+    if print_periods is not None:
+        if print_vars is None:
+            print_vars = list(include_list)
+        else:
+            print_vars = list(print_vars)
+
+        print_var_indices = []
+        for v in print_vars:
+            if v not in full_list:
+                raise ValueError(f"Variable '{v}' not found in full_list.")
+            print_var_indices.append(full_list.index(v))
+
+        if group_names is None:
+            print_group_names = ["Group 0"]
+            print_group_indices = [0]
+        else:
+            print_group_names = list(group_names)
+            print_group_indices = list(range(len(print_group_names)))
+
+        for period in print_periods:
+            if period < 0 or period >= nt:
+                raise ValueError(
+                    f"print_periods entry {period} is out of bounds for Nt={nt}."
+                )
+
+            rows = []
+            for vname, vidx in zip(print_vars, print_var_indices):
+                row = [vname]
+                row.extend(arr[g, period, vidx] for g in print_group_indices)
+                rows.append(row)
+
+            print(f"Values at period {period}")
+            print(tabulate(rows, headers=["Variable", *print_group_names]))
+            print()
 
     # --- layout helpers ---
     max_per_page = min(max_per_page, len(include_list))
