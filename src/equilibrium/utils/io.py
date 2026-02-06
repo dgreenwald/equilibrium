@@ -289,6 +289,186 @@ def read_steady_values(
     return {key: float(value) for key, value in data.items()}
 
 
+def read_calibrated_params(
+    label: str,
+    default: Optional[dict[str, float]] = None,
+    save_dir: Optional[Path | str] = None,
+    regime: Optional[int] = None,
+) -> dict[str, float]:
+    """
+    Read all calibrated parameters from a saved JSON file.
+
+    Parameters
+    ----------
+    label : str
+        Label identifying the calibration file.
+    default : dict[str, float] | None, optional
+        Default dictionary to return if file not found.
+    save_dir : Path | str | None, optional
+        Directory containing calibration files.
+    regime : int | None, optional
+        If specified, filter parameters for this regime.
+        - Global parameters are always included.
+        - Regime-specific parameters (e.g., "regime_tau_r1") are included only
+          if they match the regime, and are renamed to their base name (e.g., "tau").
+        - Shock parameters are included only if they match the regime.
+
+    Returns
+    -------
+    dict[str, float]
+        Mapping of parameter names to calibrated values.
+    """
+    if save_dir is None:
+        settings = get_settings()
+        save_dir = settings.paths.save_dir
+    else:
+        save_dir = Path(save_dir)
+
+    filepath = save_dir / f"{label}_calibrated_params.json"
+
+    try:
+        data = load_json(filepath)
+    except FileNotFoundError:
+        if default is not None:
+            return default
+        raise FileNotFoundError(
+            f"Calibration file not found: {filepath}. "
+            f"Have you saved parameters for label '{label}'?"
+        ) from None
+
+    # Cast values to float
+    raw_params = {k: float(v) for k, v in data.items()}
+
+    if regime is None:
+        return raw_params
+
+    # Filter by regime
+    import re
+
+    filtered_params = {}
+
+    # Regex for regime params: regime_{name}_r{indices}
+    # indices can be "1" or "1_2_3"
+    regime_pattern = re.compile(r"^regime_(.+)_r([\d_]+)$")
+
+    # Regex for shock params: shock_{name}_r{regime}_t{period}
+    shock_pattern = re.compile(r"^shock_(.+)_r(\d+)_t(\d+)$")
+
+    for key, value in raw_params.items():
+        # Check for RegimeParam
+        m_regime = regime_pattern.match(key)
+        if m_regime:
+            base_name = m_regime.group(1)
+            indices_str = m_regime.group(2)
+            indices = [int(x) for x in indices_str.split("_")]
+
+            if regime in indices:
+                filtered_params[base_name] = value
+            continue
+
+        # Check for ShockParam
+        m_shock = shock_pattern.match(key)
+        if m_shock:
+            # shock_name = m_shock.group(1)
+            shock_regime = int(m_shock.group(2))
+            # period = int(m_shock.group(3))
+
+            if shock_regime == regime:
+                filtered_params[key] = value
+            continue
+
+        # Assume global param
+        filtered_params[key] = value
+
+    return filtered_params
+
+
+def read_calibrated_param(
+    label: str,
+    param: str,
+    default: Optional[float] = None,
+    save_dir: Optional[Path | str] = None,
+    regime: Optional[int] = None,
+) -> float:
+    """
+    Read a calibrated parameter value from a saved JSON file.
+
+    Parameters
+    ----------
+    label : str
+        Label identifying the calibration file.
+    param : str
+        Parameter name to retrieve. If `regime` is specified, this should be
+        the base name (e.g., "tau") rather than the full stored name
+        (e.g., "regime_tau_r1").
+    default : float | None, optional
+        Default value to return if not found.
+    save_dir : Path | str | None, optional
+        Directory containing calibration files.
+    regime : int | None, optional
+        If specified, look up the parameter within the context of this regime
+        (handling renaming of regime-specific parameters).
+
+    Returns
+    -------
+    float
+        The calibrated parameter value.
+    """
+    # Load all parameters (potentially filtered/renamed by regime)
+    try:
+        params = read_calibrated_params(label, save_dir=save_dir, regime=regime)
+    except FileNotFoundError:
+        if default is not None:
+            return default
+        raise
+
+    try:
+        return params[param]
+    except KeyError:
+        if default is not None:
+            return default
+        available = list(params.keys())
+        raise KeyError(
+            f"Parameter '{param}' not found in calibration '{label}' "
+            f"(regime={regime}). Available parameters: {available}"
+        ) from None
+
+
+def save_calibrated_params(
+    params: dict[str, float],
+    label: str,
+    save_dir: Optional[Path | str] = None,
+) -> Path:
+    """
+    Save calibrated parameters to a JSON file.
+
+    Parameters
+    ----------
+    params : dict[str, float]
+        Dictionary of parameter names and values.
+    label : str
+        Label for the calibration file.
+    save_dir : Path | str | None, optional
+        Target directory.
+
+    Returns
+    -------
+    Path
+        Path to the saved file.
+    """
+    if save_dir is None:
+        settings = get_settings()
+        save_dir = settings.paths.save_dir
+    else:
+        save_dir = Path(save_dir)
+
+    save_dir.mkdir(parents=True, exist_ok=True)
+    filepath = save_dir / f"{label}_calibrated_params.json"
+
+    # Use save_json_with_backups for consistency/safety
+    return save_json_with_backups(params, filepath, stem=f"{label}_calib")
+
+
 def load_model_irfs(
     model_label: str,
     shock: Optional[str] = None,

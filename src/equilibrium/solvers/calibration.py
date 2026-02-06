@@ -19,6 +19,7 @@ import copy
 import logging
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Union
 
 import numpy as np
@@ -339,6 +340,26 @@ class CalibrationResult:
     model: Optional[Any] = None
     method: str = ""
 
+    def save(self, label: str, save_dir: Optional[Union[Path, str]] = None) -> Any:
+        """
+        Save calibrated parameters to disk.
+
+        Parameters
+        ----------
+        label : str
+            Label for the calibration file.
+        save_dir : Path | str | None, optional
+            Target directory. Defaults to settings.paths.save_dir.
+
+        Returns
+        -------
+        Path
+            Path to the saved file.
+        """
+        from ..utils.io import save_calibrated_params
+
+        return save_calibrated_params(self.parameters, label, save_dir=save_dir)
+
 
 # ---------------------------------------------------------------------------
 # Internal helpers for declarative calib_params
@@ -547,6 +568,8 @@ def calibrate(
     default_transform: Optional[SeriesTransform | Mapping[str, Any]] = None,
     return_solution: bool = False,
     progress_every: int = 1,
+    label: Optional[str] = None,
+    save_dir: Optional[Union[Path, str]] = None,
     **solver_kwargs,
 ) -> CalibrationResult:
     """
@@ -596,6 +619,12 @@ def calibrate(
         If True, return the (transformed) solution and model in the result.
     progress_every : int, default 1
         Log calibration progress every N evaluations. Set to 0 to disable.
+    label : str, optional
+        Label for saving results automatically. If provided:
+        - On success: saves parameters to disk.
+        - On failure: raises RuntimeError.
+    save_dir : Path | str, optional
+        Directory to save results to when label is provided.
     **solver_kwargs
         Additional keyword arguments passed to the solver.
 
@@ -1027,6 +1056,16 @@ def calibrate(
         logger.error("Error computing final solution: %s", str(e))
         result.solution = None
         result.model = None
+
+    # Handle automatic saving or error reporting
+    if label is not None:
+        if result.success:
+            result.save(label, save_dir=save_dir)
+        else:
+            raise RuntimeError(
+                f"Calibration failed for label '{label}': {result.message}. "
+                "Parameters were not saved."
+            )
 
     return result
 
