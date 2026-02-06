@@ -330,21 +330,22 @@ class TestPlotModelIrfsMultipleShocks:
                     plot_dir=tmpdir,
                 )
 
-    def test_unknown_shock_in_all_models_raises(self):
-        """Test that a shock not in any model raises ValueError."""
+    def test_unknown_shock_in_all_models_warns_and_skips(self):
+        """Test that a shock not in any model is skipped with a warning."""
         mod = set_model()
         mod.solve_steady(calibrate=True)
         mod.linearize()
         mod.compute_linear_irfs(20)
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            with pytest.raises(ValueError, match="not found in any model"):
-                plot_model_irfs(
+            with pytest.warns(UserWarning, match="Skipping shock"):
+                paths = plot_model_irfs(
                     [mod],
                     shock="nonexistent_shock",
                     include_list=["I"],
                     plot_dir=tmpdir,
                 )
+            assert paths == []
 
 
 if __name__ == "__main__":

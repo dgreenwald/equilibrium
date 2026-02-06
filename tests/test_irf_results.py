@@ -327,6 +327,33 @@ class TestComputeIrfsWithIntermediates:
         assert mod.linear_mod.irfs is not None
         assert mod.linear_mod.irfs.shape == (1, 20, mod.linear_mod.A.shape[0])
 
+    def test_get_irf_dict_caches(self):
+        """Test that get_irf_dict returns a cached dict."""
+        mod = set_model()
+        mod.solve_steady(calibrate=True)
+        mod.linearize()
+        mod.compute_linear_irfs(20)
+
+        first = mod.linear_mod.get_irf_dict()
+        second = mod.linear_mod.get_irf_dict()
+
+        assert first is second
+        assert "Z_til" in first
+
+        mod.linear_mod._irf_dict = None
+        rebuilt = mod.linear_mod.get_irf_dict()
+        assert rebuilt is mod.linear_mod._irf_dict
+        assert isinstance(rebuilt["Z_til"], IrfResult)
+
+    def test_get_irf_dict_requires_irfs(self):
+        """Test that get_irf_dict raises when IRFs are missing."""
+        mod = set_model()
+        mod.solve_steady(calibrate=True)
+        mod.linearize()
+
+        with pytest.raises(RuntimeError, match="No IRFs have been computed"):
+            mod.linear_mod.get_irf_dict()
+
 
 class TestPlotIrfResults:
     """Tests for plotting IrfResult dictionaries."""

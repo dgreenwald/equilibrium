@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import (
@@ -143,6 +144,7 @@ def plot_paths(
     band_alphas: Optional[Dict[str, float]] = None,
     var_in_title: bool = False,
     clear_previous: bool = True,
+    announce_dir: bool = True,
 ) -> List[Path]:
     """
     Plot time-series paths by variable, optionally grouped with confidence bands.
@@ -194,6 +196,8 @@ def plot_paths(
     clear_previous : bool, default True
         Remove previously generated ``prefix``-matching files before saving new
         pages.
+    announce_dir : bool, default True
+        Whether to print the output directory when rendering plots.
 
     Returns
     -------
@@ -209,7 +213,8 @@ def plot_paths(
     # --- defaults / normalization ---
     plot_dir = Path(plot_dir)
     plot_dir.mkdir(parents=True, exist_ok=True)
-    print(f"Saving plots to: {plot_dir.resolve()}")
+    if announce_dir:
+        print(f"Saving plots to: {plot_dir.resolve()}")
 
     if not plot_type.startswith("."):
         plot_type = "." + plot_type
@@ -1315,35 +1320,6 @@ def plot_model_irfs(
     if model_labels and models:
         raise ValueError("Provide either models or model_labels, not both.")
 
-    if model_labels:
-        if plot_dir is None:
-            settings = get_settings()
-            sorted_labels = sorted(model_labels)
-            subdir_name = "_".join(sorted_labels)
-            plot_dir = settings.paths.plot_dir / "irfs" / subdir_name
-        irf_dicts = [
-            load_model_irfs(label, save_dir=save_dir) for label in model_labels
-        ]
-        plot_kwargs = plot_spec.to_kwargs() if plot_spec is not None else {}
-        merged_kwargs = {**plot_kwargs, **kwargs}
-        return plot_irf_results(
-            irf_results=irf_dicts,
-            include_list=include_list,
-            plot_dir=plot_dir,
-            result_names=model_names or list(model_labels),
-            shocks=shocks if shocks is not None else ([shock] if shock else None),
-            prefix=prefix,
-            plot_type=plot_type,
-            title_str=title_str,
-            x_str=x_str,
-            n_periods=n_periods,
-            shock_size=shock_size,
-            **merged_kwargs,
-        )
-
-    if not models:
-        raise ValueError("models must be a non-empty sequence")
-
     # Handle backward compatibility: shock (singular) vs shocks (plural)
     if shock is not None and shocks is not None:
         raise ValueError(
@@ -1355,184 +1331,131 @@ def plot_model_irfs(
         # Single shock provided
         shocks = [shock]
 
-    # Validate all inputs are Model objects
-    for i, model in enumerate(models):
-        if not isinstance(model, Model):
-            raise TypeError(
-                f"Model at index {i} has unsupported type {type(model).__name__}. "
-                "Expected Model."
-            )
-
-    # Validate each model has been linearized and has IRFs
-    for i, model in enumerate(models):
-        if model.linear_mod is None:
-            raise RuntimeError(
-                f"Model at index {i} (label='{model.label}') has not been linearized. "
-                "Call model.linearize() first."
-            )
-        if model.linear_mod.irfs is None:
-            raise RuntimeError(
-                f"Model at index {i} (label='{model.label}') has no computed IRFs. "
-                "Call model.compute_linear_irfs() first."
-            )
-
-    # Determine shocks to plot
-    if shocks is None:
-        # Use union of all shocks from all models
-        all_shocks: List[str] = []
-        for model in models:
-            for shock_name in model.exog_list:
-                if shock_name not in all_shocks:
-                    all_shocks.append(shock_name)
-        shocks = all_shocks
-
-    if not shocks:
-        raise ValueError(
-            "No shocks found. Either specify shock/shocks parameter or ensure models have exog_list."
-        )
-
     plot_kwargs = plot_spec.to_kwargs() if plot_spec is not None else {}
     merged_kwargs = {**plot_kwargs, **kwargs}
+    if "announce_dir" not in merged_kwargs:
+        merged_kwargs["announce_dir"] = False
 
-    # Extract var_titles from kwargs to use for shock labels
-    var_titles = merged_kwargs.get("var_titles", {}) or {}
+    if not models and not model_labels:
+        raise ValueError("models must be a non-empty sequence")
 
-    # Build shock_sizes dict
-    if isinstance(shock_size, dict):
-        shock_sizes = shock_size.copy()
+    irf_dicts: List[dict[str, IrfResult]] = []
+    default_names: List[str]
+    shock_size_for_results: Union[float, dict[str, float]] = shock_size
+
+    if model_labels:
+        default_names = list(model_labels)
+        if plot_dir is None:
+            settings = get_settings()
+            sorted_labels = sorted(model_labels)
+            subdir_name = "_".join(sorted_labels)
+            plot_dir = settings.paths.plot_dir / "irfs" / subdir_name
+        irf_dicts = [
+            load_model_irfs(label, save_dir=save_dir) for label in model_labels
+        ]
     else:
-        # If shock_size is a float, use it for all shocks
-        shock_sizes = {}
-
-    # For any shock not in shock_sizes, default to SIG_<shock> from first model
-    for shock_name in shocks:
-        if shock_name not in shock_sizes:
-            # Try to get SIG_<shock> from the first model's params
-            sig_key = f"SIG_{shock_name}"
-            if hasattr(models[0], "params") and sig_key in models[0].params:
-                shock_sizes[shock_name] = models[0].params[sig_key]
-            else:
-                # Fall back to 1.0 if SIG_<shock> not found
-                shock_sizes[shock_name] = (
-                    shock_size if isinstance(shock_size, float) else 1.0
+        # Validate all inputs are Model objects
+        for i, model in enumerate(models):
+            if not isinstance(model, Model):
+                raise TypeError(
+                    f"Model at index {i} has unsupported type {type(model).__name__}. "
+                    "Expected Model."
                 )
 
-    # Set default model names from model labels
+        # Validate each model has been linearized and has IRFs
+        for i, model in enumerate(models):
+            if model.linear_mod is None:
+                raise RuntimeError(
+                    f"Model at index {i} (label='{model.label}') has not been linearized. "
+                    "Call model.linearize() first."
+                )
+            if model.linear_mod.irfs is None:
+                raise RuntimeError(
+                    f"Model at index {i} (label='{model.label}') has no computed IRFs. "
+                    "Call model.compute_linear_irfs() first."
+                )
+
+        # Determine shocks to plot for sizing defaults
+        shocks_for_sizes = list(shocks) if shocks is not None else None
+        if shocks_for_sizes is None:
+            shocks_for_sizes = []
+            for model in models:
+                for shock_name in model.exog_list:
+                    if shock_name not in shocks_for_sizes:
+                        shocks_for_sizes.append(shock_name)
+
+        if not shocks_for_sizes:
+            raise ValueError(
+                "No shocks found. Either specify shock/shocks parameter or ensure models have exog_list."
+            )
+
+        shocks = shocks_for_sizes
+
+        # Build shock_sizes dict
+        if isinstance(shock_size, dict):
+            shock_sizes = shock_size.copy()
+        else:
+            # If shock_size is a float, use it for all shocks
+            shock_sizes = {}
+
+        # For any shock not in shock_sizes, default to SIG_<shock> from first model
+        for shock_name in shocks_for_sizes:
+            if shock_name not in shock_sizes:
+                # Try to get SIG_<shock> from the first model's params
+                sig_key = f"SIG_{shock_name}"
+                if hasattr(models[0], "params") and sig_key in models[0].params:
+                    shock_sizes[shock_name] = models[0].params[sig_key]
+                else:
+                    # Fall back to 1.0 if SIG_<shock> not found
+                    shock_sizes[shock_name] = (
+                        shock_size if isinstance(shock_size, float) else 1.0
+                    )
+
+        shock_size_for_results = shock_sizes
+
+        default_names = [model.label for model in models]
+
+        # Set default plot_dir from Settings with subdirectory based on model labels
+        if plot_dir is None:
+            settings = get_settings()
+            # Create subdirectory name from sorted model labels to avoid file congestion
+            sorted_labels = sorted(model.label for model in models)
+            subdir_name = "_".join(sorted_labels)
+            plot_dir = settings.paths.plot_dir / "irfs" / subdir_name
+
+        # Set default include_list to first model's variables if not provided
+        if include_list is None:
+            include_list = list(models[0].all_vars)
+
+        # Convert Model objects to IrfResult dicts
+        for model in models:
+            irf_dicts.append(model.linear_mod.get_irf_dict())
+
     if model_names is None:
-        model_names = [model.label for model in models]
-    elif len(model_names) != len(models):
+        model_names = default_names
+    elif len(model_names) != len(irf_dicts):
         raise ValueError(
             f"model_names length ({len(model_names)}) must match "
-            f"models length ({len(models)})"
+            f"models length ({len(irf_dicts)})"
         )
 
-    # Set default plot_dir from Settings with subdirectory based on model labels
-    if plot_dir is None:
-        settings = get_settings()
-        # Create subdirectory name from sorted model labels to avoid file congestion
-        sorted_labels = sorted(model.label for model in models)
-        subdir_name = "_".join(sorted_labels)
-        plot_dir = settings.paths.plot_dir / "irfs" / subdir_name
+    print(f"Saving plots to: {Path(plot_dir).resolve()}")
 
-    # Determine the union of all variable names that exist in any model
-    all_var_names: List[str] = []
-    for model in models:
-        for name in model.all_vars:
-            if name not in all_var_names:
-                all_var_names.append(name)
-
-    # Set default include_list to first model's variables if not provided
-    if include_list is None:
-        include_list = list(models[0].all_vars)
-
-    # Filter to only variables in include_list (preserving include_list order)
-    full_list = [v for v in include_list if v in all_var_names]
-
-    if not full_list:
-        raise ValueError(
-            f"None of the variables in include_list {list(include_list)} "
-            f"are present in any model. Available variables: {all_var_names}"
-        )
-
-    # Determine the common time dimension (min across all models)
-    n_periods_available = [model.linear_mod.irfs.shape[1] for model in models]
-    min_periods = min(n_periods_available)
-
-    if n_periods is not None:
-        if n_periods > min_periods:
-            raise ValueError(
-                f"Requested n_periods={n_periods} exceeds minimum available "
-                f"IRF horizon={min_periods}"
-            )
-        actual_periods = n_periods
-    else:
-        actual_periods = min_periods
-
-    # Loop through shocks and plot each
-    all_paths: List[Path] = []
-    for shock_name in shocks:
-        # Validate shock exists in at least one model and get shock indices
-        shock_indices = []
-        shock_found = False
-        for i, model in enumerate(models):
-            if shock_name in model.exog_list:
-                shock_indices.append(model.exog_list.index(shock_name))
-                shock_found = True
-            else:
-                shock_indices.append(None)  # Mark as missing
-
-        if not shock_found:
-            raise ValueError(
-                f"Shock '{shock_name}' not found in any model. "
-                f"Available shocks across models: {[model.exog_list for model in models]}"
-            )
-
-        # Set shock-specific defaults
-        shock_prefix = prefix if prefix is not None else f"irf_to_{shock_name}"
-        # Use var_titles to get a friendly name for the shock if available
-        shock_label = var_titles.get(shock_name, shock_name)
-        shock_title = (
-            title_str if title_str is not None else f"Impulse Response to {shock_label}"
-        )
-
-        # Get shock-specific size
-        current_shock_size = shock_sizes.get(shock_name, 1.0)
-
-        # Build path_vals array: shape (n_models, n_periods, n_vars)
-        n_models = len(models)
-        n_vars = len(full_list)
-        path_vals = np.full((n_models, actual_periods, n_vars), np.nan)
-
-        for i, model in enumerate(models):
-            shock_idx = shock_indices[i]
-            if shock_idx is not None:
-                # Shock exists in this model
-                irfs = model.linear_mod.irfs[
-                    shock_idx, :actual_periods, :
-                ]  # (actual_periods, n_state_vars)
-
-                for j, var_name in enumerate(full_list):
-                    if var_name in model.all_vars:
-                        var_idx = model.all_vars.index(var_name)
-                        path_vals[i, :, j] = current_shock_size * irfs[:, var_idx]
-            # else: shock_idx is None, so path_vals[i, :, :] remains NaN
-
-        # Call plot_paths with the harmonized data
-        paths = plot_paths(
-            path_vals=path_vals,
-            full_list=full_list,
-            include_list=full_list,
-            title_str=shock_title,
-            x_str=x_str,
-            prefix=shock_prefix,
-            group_names=list(model_names),
-            plot_dir=plot_dir,
-            plot_type=plot_type,
-            **merged_kwargs,
-        )
-        all_paths.extend(paths)
-
-    return all_paths
+    # Plot each shock using plot_irf_results
+    return plot_irf_results(
+        irf_results=irf_dicts,
+        include_list=include_list,
+        plot_dir=plot_dir,
+        result_names=list(model_names),
+        shocks=shocks,
+        prefix=prefix,
+        plot_type=plot_type,
+        title_str=title_str,
+        x_str=x_str,
+        n_periods=n_periods,
+        shock_size=shock_size_for_results,
+        **merged_kwargs,
+    )
 
 
 def plot_irf_results(
@@ -1574,7 +1497,7 @@ def plot_irf_results(
     include_list : Sequence[str], optional
         List of variable names to plot. Variables not present in a result will
         be filled with NaN. If None, defaults to all variables present in the
-        first result.
+        first result (UX, Y, and exogenous variables).
     plot_dir : str or Path, optional
         Directory where plot files will be saved. If None, defaults to a
         subdirectory called "irfs" inside the plot_dir specified in Settings.
@@ -1716,6 +1639,9 @@ def plot_irf_results(
             for name in irf_result.y_names:
                 if name not in all_var_names:
                     all_var_names.append(name)
+            for name in irf_result.exog_names:
+                if name not in all_var_names:
+                    all_var_names.append(name)
 
     # Set default include_list
     if include_list is None:
@@ -1760,7 +1686,10 @@ def plot_irf_results(
                 result_labels.append(result_names[i])
 
         if not shock_results:
-            # Skip shocks that don't exist in any dict
+            warnings.warn(
+                f"Skipping shock '{shock_name}' because it is not present in any result.",
+                stacklevel=2,
+            )
             continue
 
         # Determine common time dimension
@@ -1793,6 +1722,11 @@ def plot_irf_results(
                     var_idx = irf_result.y_names.index(var_name)
                     path_vals[i, :, j] = (
                         current_shock_size * irf_result.Y[:actual_periods, var_idx]
+                    )
+                elif var_name in irf_result.exog_names:
+                    var_idx = irf_result.exog_names.index(var_name)
+                    path_vals[i, :, j] = (
+                        current_shock_size * irf_result.Z[:actual_periods, var_idx]
                     )
 
         # Call plot_paths for this shock

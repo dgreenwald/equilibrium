@@ -608,7 +608,10 @@ class TestPlotDeterministicResults:
     def test_plot_invalid_result_type_raises(self):
         """Test that invalid result type raises TypeError."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            with pytest.raises(TypeError, match="unsupported type"):
+            with pytest.raises(
+                TypeError,
+                match="results must contain DeterministicResult or SequenceResult",
+            ):
                 plot_deterministic_results(
                     ["not a result"],  # Invalid type
                     include_list=["I"],
@@ -1090,8 +1093,8 @@ class TestPlotModelIrfs:
                     plot_dir=tmpdir,
                 )
 
-    def test_plot_unknown_shock_raises(self):
-        """Test that unknown shock raises ValueError."""
+    def test_plot_unknown_shock_warns_and_skips(self):
+        """Test that unknown shock is skipped with a warning."""
         mod = set_model()
         mod.solve_steady(calibrate=True)
         mod.linearize()
@@ -1100,13 +1103,14 @@ class TestPlotModelIrfs:
         from equilibrium.plot import plot_model_irfs
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            with pytest.raises(ValueError, match="not found in any model"):
-                plot_model_irfs(
+            with pytest.warns(UserWarning, match="Skipping shock"):
+                paths = plot_model_irfs(
                     [mod],
                     shock="nonexistent_shock",
                     include_list=["I"],
                     plot_dir=tmpdir,
                 )
+            assert paths == []
 
     def test_plot_nonexistent_variable_raises(self):
         """Test that requesting nonexistent variable raises ValueError."""

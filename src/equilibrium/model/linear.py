@@ -314,6 +314,61 @@ class LinearModel:
 
         return s_sim
 
+    def get_irf_dict(self) -> dict[str, "IrfResult"]:
+        """
+        Return cached IrfResult dict if available, otherwise build and cache it.
+
+        Returns
+        -------
+        dict[str, IrfResult]
+            Dictionary mapping shock names to IrfResult objects.
+
+        Raises
+        ------
+        RuntimeError
+            If no IRFs have been computed.
+        """
+        from ..solvers.linear import compute_linear_intermediates
+        from ..solvers.results import IrfResult
+
+        if getattr(self, "_irf_dict", None) is not None:
+            return self._irf_dict
+
+        if self.irfs is None:
+            raise RuntimeError("No IRFs have been computed. Call compute_irfs() first.")
+
+        m = self.model
+        N_u = m.N["u"]
+        N_x = m.N["x"]
+        N_z = m.N["z"]
+        N_ux = N_u + N_x
+        shock_names = m.exog_list
+        ux_names = m.var_lists["u"] + m.var_lists["x"]
+        exog_names = m.exog_list
+        y_names = m.var_lists.get("intermediate", [])
+
+        self._irf_dict = {}
+        for i_shock, shock_name in enumerate(shock_names):
+            irf_full = self.irfs[i_shock, :, :]
+            UX = irf_full[:, :N_ux]
+            Z = irf_full[:, N_ux : N_ux + N_z]
+            # IRFs are in deviation form
+            Y = compute_linear_intermediates(m, UX, Z, deviations=True)
+
+            self._irf_dict[shock_name] = IrfResult(
+                UX=UX,
+                Z=Z,
+                Y=Y,
+                model_label=m.label,
+                var_names=ux_names,
+                exog_names=exog_names,
+                y_names=y_names,
+                shock_name=shock_name,
+                shock_size=1.0,
+            )
+
+        return self._irf_dict
+
     def compute_irfs(self, Nt_irf):
         """
         Compute impulse response functions for all shocks.
@@ -339,12 +394,8 @@ class LinearModel:
         The intermediate variables (Y) are computed using the existing
         ``compute_linear_intermediates`` function from ``solvers.linear``.
         """
-        from ..solvers.linear import compute_linear_intermediates
-        from ..solvers.results import IrfResult
-
         Ns = self.A.shape[0]
         Nshock = self.B.shape[1]
-        m = self.model
 
         # Store full IRF tensor for backward compatibility
         self.irfs = np.zeros((Nshock, Nt_irf, Ns))
@@ -355,56 +406,7 @@ class LinearModel:
             if tt < Nt_irf - 1:
                 Psi = self.A @ Psi
 
-        # Extract dimensions
-        N_u = m.N["u"]
-        N_x = m.N["x"]
-        N_z = m.N["z"]
-        N_ux = N_u + N_x
-
-        # Build IrfResult for each shock
-        irf_dict = {}
-        shock_names = m.exog_list
-
-        for i_shock, shock_name in enumerate(shock_names):
-            # Extract the IRF for this shock
-            # self.irfs has shape (Nshock, Nt_irf, Ns)
-            # where Ns includes [u; x; z; intermediates; E; expectations_vars]
-            irf_full = self.irfs[i_shock, :, :]  # Shape: (Nt_irf, Ns)
-
-            # Extract UX (control and state variables)
-            UX = irf_full[:, :N_ux]  # Shape: (Nt_irf, N_ux)
-
-            # Extract Z (exogenous variables)
-            Z = irf_full[:, N_ux : N_ux + N_z]  # Shape: (Nt_irf, N_z)
-
-            # Compute Y (intermediate variables) in deviation form
-            # UX and Z from IRFs are already deviations from steady state
-            Y = compute_linear_intermediates(m, UX, Z, deviations=True)
-
-            # Get variable names
-            var_names = m.var_lists["u"] + m.var_lists["x"]
-            exog_names = m.exog_list
-            y_names = m.var_lists.get("intermediate", [])
-
-            # Create IrfResult for this shock
-            irf_result = IrfResult(
-                UX=UX,
-                Z=Z,
-                Y=Y,
-                model_label=m.label,
-                var_names=var_names,
-                exog_names=exog_names,
-                y_names=y_names,
-                shock_name=shock_name,
-                shock_size=1.0,
-            )
-
-            irf_dict[shock_name] = irf_result
-
-        # Cache the irf_dict for saving
-        self._irf_dict = irf_dict
-
-        return irf_dict
+        return self.get_irf_dict()
 
     def as_dict(self, include_irfs: bool = True):
         """
@@ -496,40 +498,7 @@ class LinearModel:
         )
 
         # Prepare data - save IrfResult objects with Y data
-        # Compute IRFs if not already in IrfResult format
-        if not hasattr(self, "_irf_dict") or self._irf_dict is None:
-            # Need to compute IrfResults with Y data
-            from ..solvers.linear import compute_linear_intermediates
-            from ..solvers.results import IrfResult
-
-            N_u = self.model.N["u"]
-            N_x = self.model.N["x"]
-            N_z = self.model.N["z"]
-            N_ux = N_u + N_x
-            shock_names = self.model.exog_list
-            ux_names = self.model.var_lists["u"] + self.model.var_lists["x"]
-            exog_names = self.model.exog_list
-            y_names = self.model.var_lists.get("intermediate", [])
-
-            self._irf_dict = {}
-            for i_shock, shock_name in enumerate(shock_names):
-                irf_full = self.irfs[i_shock, :, :]
-                UX = irf_full[:, :N_ux]
-                Z = irf_full[:, N_ux : N_ux + N_z]
-                # IRFs are in deviation form
-                Y = compute_linear_intermediates(self.model, UX, Z, deviations=True)
-
-                self._irf_dict[shock_name] = IrfResult(
-                    UX=UX,
-                    Z=Z,
-                    Y=Y,
-                    model_label=model_label,
-                    var_names=ux_names,
-                    exog_names=exog_names,
-                    y_names=y_names,
-                    shock_name=shock_name,
-                    shock_size=1.0,
-                )
+        self._irf_dict = self.get_irf_dict()
 
         # Save each IrfResult's data separately
         data = {"irfs": self.irfs}  # Keep for backward compatibility
