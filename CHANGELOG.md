@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-02-07
+
+### Added
+- **Calibrated Parameter I/O**: New functions for reading and saving calibrated parameter values
+  - `read_calibrated_param()` and `read_calibrated_params()` for loading parameter values by label and regime
+  - `save_calibrated_params()` for persisting calibration results
+- **PathResult Indexing**: Added indexing support to `PathResult` for easier access to simulation data
+- **Block Suffix Control**: New `suffix_before` parameter in `Model.add_block()` to control suffix placement
+  - Allows inserting suffix before placeholder terms like `_AGENT`, `_ATYPE`, `_INSTRUMENT`
+  - Example: `C_AGENT` with `suffix="_firm"` and `suffix_before=["_AGENT"]` becomes `C_firm_AGENT` instead of `C_AGENT_firm`
+- **Block Variable Transformation**: Support for applying variable transformations (suffix, rename) to `ModelBlock` instances
+- **Calibration Path Transforms**: Series transforms can now be applied to paths before evaluating distance from calibration targets
+
+### Changed
+- **BREAKING**: Refactored `calibrate()` function API with typed input classes
+  - Replaced generic `param_to_model` function parameter with specific typed classes
+  - New classes: `RegimeParam`, `ModelParam`, `ShockParam` for clearer parameter specification
+  - Provides better type safety and more explicit calibration configuration
+- Improved `plot_paths()` to print variable values for easier inspection
+- Suppressed unnecessary console output during calibration for cleaner logs
+- Refactored internal IRF dict construction for improved code maintainability
+- Streamlined `SequenceResult` splicing implementation
+- Reorganized `model.py` file structure for better modularity
+
+### Fixed
+- Fixed suffix application behavior in block transformation edge cases
+- Various linting and code quality improvements
+
 ## [0.1.0] - 2026-01-28
 
 ### Added
@@ -81,7 +109,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Comprehensive test suite
 - Documentation and examples
 
-[Unreleased]: https://github.com/yourusername/equilibrium/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/yourusername/equilibrium/compare/v0.0.2...v0.1.0
-[0.0.2]: https://github.com/yourusername/equilibrium/compare/v0.0.1...v0.0.2
-[0.0.1]: https://github.com/yourusername/equilibrium/releases/tag/v0.0.1
+[Unreleased]: https://github.com/dgreenwald/equilibrium/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/dgreenwald/equilibrium/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/dgreenwald/equilibrium/compare/v0.0.2...v0.1.0
+[0.0.2]: https://github.com/dgreenwald/equilibrium/compare/v0.0.1...v0.0.2
+[0.0.1]: https://github.com/dgreenwald/equilibrium/releases/tag/v0.0.1

@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 
 [project]
 name         = "equilibrium"
-version      = "0.1.0"                   # bump manually for now
+version      = "0.2.0"                   # bump manually for now
 description  = "Dynamic general-equilibrium solver using JAX"
 readme       = "README.md"               # long description on PyPI
 requires-python = ">=3.10"

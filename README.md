@@ -218,6 +218,10 @@ model.add_block(production_block(model))
 
 ### Parameter Calibration
 
+Equilibrium supports flexible parameter calibration through calibration rules or the advanced `calibrate()` function.
+
+#### Basic Calibration with Rules
+
 Enable automatic parameter calibration during steady-state solving:
 
 ```python
@@ -228,6 +232,59 @@ model.rules['calibration'] += [
 
 # Solve with calibration enabled
 model.solve_steady(calibrate=True)
+```
+
+#### Advanced Calibration with `calibrate()`
+
+For more complex calibration scenarios, use the `calibrate()` function with typed parameter specifications:
+
+```python
+from equilibrium import calibrate, PointTarget, RegimeParam, ModelParam
+
+# Define calibration targets
+targets = [
+    PointTarget(var_name='K', target=6.0, regime=0),
+    PointTarget(var_name='Y', target=1.5, regime=0),
+]
+
+# Specify parameters to calibrate with typed inputs
+params_to_calibrate = [
+    RegimeParam(name='bet', regime=0, initial_guess=0.95),
+    ModelParam(name='delta', initial_guess=0.1),
+]
+
+# Run calibration
+result = calibrate(
+    model=model,
+    spec=det_spec,  # DetSpec defining regimes
+    targets=targets,
+    params_to_calibrate=params_to_calibrate,
+    Nt=100,
+)
+
+# Access calibrated values
+print(f"Calibrated beta: {result.calibrated_params['bet']}")
+```
+
+#### Saving and Loading Calibrated Parameters
+
+Persist calibrated parameters for reuse across sessions:
+
+```python
+from equilibrium import save_calibrated_params, read_calibrated_param, read_calibrated_params
+
+# Save calibrated parameters with a label
+save_calibrated_params(
+    params={'bet': 0.96, 'delta': 0.08},
+    label='baseline_model',
+    regime=0,
+)
+
+# Read a single calibrated parameter
+bet_value = read_calibrated_param('bet', label='baseline_model', regime=0)
+
+# Read multiple calibrated parameters at once
+params = read_calibrated_params(['bet', 'delta'], label='baseline_model', regime=0)
 ```
 
 ### Working with Model Variants
@@ -291,16 +348,23 @@ plot_model_irfs(
 
 ### Saving and Loading Results
 
-Read steady-state values saved with the model label:
+Read steady-state values and calibrated parameters saved with the model label:
 
 ```python
-from equilibrium import read_steady_value, read_steady_values
+from equilibrium import (
+    read_steady_value,
+    read_steady_values,
+    read_calibrated_param,
+    read_calibrated_params,
+)
 
-# Read a single steady-state value by name
+# Read steady-state values
 steady_c = read_steady_value("c", label="my_model")
-
-# Read multiple values at once (returns a dict)
 steady_vals = read_steady_values(["c", "k", "y"], label="my_model")
+
+# Read calibrated parameters
+bet_value = read_calibrated_param('bet', label='my_model', regime=0)
+params = read_calibrated_params(['bet', 'delta'], label='my_model', regime=0)
 ```
 
 ## API Reference
