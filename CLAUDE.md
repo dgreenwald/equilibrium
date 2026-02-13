@@ -411,6 +411,94 @@ z_path = spec.build_exog_paths(model, Nt=100, regime=0)
 
 Results are stored in `DeterministicResult` and `SequenceResult` containers (`solvers/results.py`) with save/load support for NPZ, JSON, and CSV formats.
 
+### Parameter Calibration
+
+**Location**: `src/equilibrium/solvers/calibration.py`
+
+Equilibrium provides a flexible calibration system for finding parameter values that match target moments. The `calibrate()` function uses typed parameter specifications for clear, type-safe calibration workflows.
+
+#### Basic Calibration with Model Rules
+
+For simple calibration, add calibration rules to the model:
+
+```python
+# Add calibration equations
+model.rules['calibration'] += [
+    ('bet', 'K - 6.0'),  # Calibrate discount factor to match capital target
+]
+
+# Solve with calibration enabled
+model.solve_steady(calibrate=True)
+```
+
+#### Advanced Calibration API
+
+For multi-regime calibration or complex scenarios, use the `calibrate()` function with typed inputs:
+
+```python
+from equilibrium import calibrate, PointTarget, RegimeParam, ModelParam, ShockParam
+
+# Define calibration targets
+targets = [
+    PointTarget(var_name='K', target=6.0, regime=0),
+    PointTarget(var_name='Y', target=1.5, regime=0),
+    PointTarget(var_name='C', target=1.0, regime=1),
+]
+
+# Specify parameters to calibrate
+params_to_calibrate = [
+    RegimeParam(name='bet', regime=0, initial_guess=0.95),  # Regime-specific
+    ModelParam(name='delta', initial_guess=0.1),            # Model-wide
+    ShockParam(name='log_Z_til', param='VOL', initial_guess=0.01),  # Shock parameter
+]
+
+# Run calibration
+result = calibrate(
+    model=model,
+    spec=det_spec,
+    targets=targets,
+    params_to_calibrate=params_to_calibrate,
+    Nt=100,
+    series_transforms={'log_K': SeriesTransform(log_to_level=True)},  # Optional
+)
+
+# Access results
+print(f"Calibrated values: {result.calibrated_params}")
+print(f"Final distance: {result.final_distance}")
+```
+
+**Parameter Types**:
+- **`RegimeParam`**: Calibrate a parameter specific to a regime (e.g., tax rate in regime 0)
+- **`ModelParam`**: Calibrate a model-wide parameter (e.g., depreciation rate)
+- **`ShockParam`**: Calibrate shock process parameters (e.g., volatility, persistence)
+
+**Target Types**:
+- **`PointTarget`**: Match a variable to a specific value in a regime
+- **`FunctionalTarget`**: Match a custom function of simulation paths
+
+#### Saving and Loading Calibrated Parameters
+
+Persist calibrated parameters for reuse across sessions:
+
+```python
+from equilibrium import save_calibrated_params, read_calibrated_param, read_calibrated_params
+
+# Save calibrated parameters with a label and regime
+save_calibrated_params(
+    params={'bet': 0.96, 'delta': 0.08},
+    label='baseline_model',
+    regime=0,
+)
+
+# Read a single calibrated parameter
+bet_value = read_calibrated_param('bet', label='baseline_model', regime=0)
+
+# Read multiple calibrated parameters at once (returns dict)
+params = read_calibrated_params(['bet', 'delta'], label='baseline_model', regime=0)
+```
+
+**Important**: These I/O functions are separate from `read_steady_value()` / `read_steady_values()`, which load endogenous variable values. Use `read_calibrated_param()` for parameter values, `read_steady_value()` for state/control variables.
+
 ### Overlaying Data on Plots
 
 The `plot_deterministic_results()` function supports overlaying external data (e.g., empirical observations, alternative model outputs) on simulation plots for direct visual comparison. This is useful for model validation, calibration, and comparing simulations with real-world data.
