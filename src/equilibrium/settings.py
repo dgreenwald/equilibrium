@@ -94,6 +94,18 @@ def _default_config_file() -> Path:
     return Path(user_config_dir(APP_NAME)) / "config.toml"
 
 
+def _find_env_file(filename: str = ".env") -> Optional[Path]:
+    """
+    Locate the nearest .env file by searching the current directory and parents.
+    """
+    cwd = Path.cwd()
+    for directory in [cwd, *cwd.parents]:
+        candidate = directory / filename
+        if candidate.is_file():
+            return candidate
+    return None
+
+
 class Paths(BaseModel):
     data_dir: Path = Field(default_factory=_default_data_dir)
     save_dir: Optional[Path] = None
@@ -147,7 +159,7 @@ class Paths(BaseModel):
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix=f"{APP_NAME}_",  # e.g., EQUILIBRIUM_PATHS__DATA_DIR overrides paths.data_dir
-        env_file=".env",  # optional: project-level .env
+        env_file=".env",  # default; get_settings may override via parent directory search
         env_nested_delimiter="__",  # EQUILIBRIUM_PATHS__DATA_DIR=...
         extra="ignore",
     )
@@ -217,11 +229,15 @@ def get_settings() -> Settings:
     2) User config file (if present): ~/.config/yourpkg/config.toml
     3) .env / environment variables (highest precedence)
 
+    The .env file is discovered by searching from the current working
+    directory upward through parent directories (nearest match wins).
+
     If logging is enabled in settings, the logging system is automatically
     configured after loading settings.
     """
     # Step 1/3: start with env/.env + defaults
-    s = Settings()
+    env_file = _find_env_file()
+    s = Settings(_env_file=env_file)
 
     # Step 2/3: merge user file if present
     if s.config_file.is_file():
@@ -234,7 +250,7 @@ def get_settings() -> Settings:
         s = s.model_copy(update=Settings(**payload).model_dump(exclude_unset=True))
 
     # Step 3/3: re-apply env on top (env wins)
-    s = Settings(**s.model_dump(exclude_unset=True))
+    s = Settings(_env_file=env_file, **s.model_dump(exclude_unset=True))
 
     s = s.ensure_dirs()
 
