@@ -938,6 +938,7 @@ class Model:
         init_dict=None,
         calibrate=False,
         save: bool = False,
+        save_tex: bool = False,
         load_initial_guess: bool = True,
         backup_to_use: int | None = None,
         verbose_iterations: bool = False,
@@ -953,6 +954,8 @@ class Model:
         solver : {"auto", "scipy", "newton"}, optional
             Solver selection. "auto" uses "newton" when verbose_iterations is
             enabled, otherwise "scipy". If "newton" fails, falls back to "scipy".
+        save_tex : bool, optional
+            If True, export steady state values to LaTeX property list files.
         """
 
         if init_dict is None:
@@ -1328,6 +1331,10 @@ class Model:
                 self.update_steady(calibrate=calibrate)
                 if save:
                     self._save_steady_snapshot()
+                if save_tex:
+                    # Export steady state variables and parameters to LaTeX
+                    # (reads JSON once, exports to two separate files)
+                    self.export_steady_to_latex()
             else:
                 self.steady_dict = {}
         else:
@@ -1536,6 +1543,7 @@ class Model:
         init_dict=None,
         calibrate=False,
         save: bool = False,
+        save_tex: bool = False,
         load_initial_guess: bool = True,
         backup_to_use: int | None = None,
         *,
@@ -1558,6 +1566,10 @@ class Model:
         solver : {"auto", "scipy", "newton"}, optional
             Solver selection. "auto" uses "newton" when verbose_iterations is
             enabled, otherwise "scipy". If "newton" fails, falls back to "scipy".
+        save_tex : bool, optional
+            If True, export steady state values to LaTeX property list files
+            in {plot_dir}/tex/. Default is False. If calibrate=True, also exports
+            calibrated parameters.
         """
 
         attempt_count = 0
@@ -1573,6 +1585,7 @@ class Model:
                 init_dict=init_dict,
                 calibrate=calibrate,
                 save=save,
+                save_tex=save_tex,
                 load_initial_guess=kwargs.get("load_initial_guess", load_initial_guess),
                 backup_to_use=kwargs.get("backup_to_use", backup_to_use),
                 verbose_iterations=use_verbose,
@@ -1816,6 +1829,82 @@ class Model:
             key: jnp.asarray(value, dtype=jnp.float64)
             for key, value in serializable.items()
         }
+
+    def export_steady_to_latex(
+        self,
+        floatfmt_vars: str = ".3f",
+        floatfmt_params: str = ".4f",
+        tex_dir: Path | str | None = None,
+    ):
+        """
+        Export steady state variables and parameters to separate LaTeX files.
+
+        Reads the steady state JSON once and exports to two files:
+        - {label}_steady.tex: Variables (accessed with \\steady{label_var})
+        - {label}_params.tex: Parameters (accessed with \\param{label_param})
+
+        Parameters
+        ----------
+        floatfmt_vars : str, default ".3f"
+            Format specification for variable values.
+        floatfmt_params : str, default ".4f"
+            Format specification for parameter values.
+        tex_dir : Path | str | None, optional
+            Directory to write .tex files. If None, uses {plot_dir}/tex/.
+
+        Examples
+        --------
+        >>> model.solve_steady(save=True)
+        >>> model.export_steady_to_latex()
+        # Creates baseline_steady.tex and baseline_params.tex
+
+        >>> # In LaTeX:
+        # \\input{baseline_steady.tex}
+        # \\input{baseline_params.tex}
+        # Capital: $K^* = \\steady{baseline_K}$
+        # Discount factor: $\\beta = \\param{baseline_bet}$
+        """
+        # Read steady state once
+        steady_values = io.read_steady_values(label=self.label)
+
+        # Separate variables and parameters
+        vars_dict = {
+            key: value for key, value in steady_values.items() if key not in self.params
+        }
+        params_dict = {
+            key: value for key, value in steady_values.items() if key in self.params
+        }
+
+        # Determine output directory
+        if tex_dir is None:
+            settings = get_settings()
+            tex_dir = settings.paths.plot_dir / "tex"
+        else:
+            tex_dir = Path(tex_dir)
+
+        # Export variables to {label}_steady.tex
+        if vars_dict:
+            vars_path = tex_dir / f"{self.label}_steady.tex"
+            io._write_latex_property_list(
+                data=vars_dict,
+                path=vars_path,
+                prop_name="g_equilibrium_steady_prop",
+                command_str="steady",
+                prefix=self.label,
+                floatfmt=floatfmt_vars,
+            )
+
+        # Export parameters to {label}_params.tex
+        if params_dict:
+            params_path = tex_dir / f"{self.label}_params.tex"
+            io._write_latex_property_list(
+                data=params_dict,
+                path=params_path,
+                prop_name="g_equilibrium_param_prop",
+                command_str="param",
+                prefix=self.label,
+                floatfmt=floatfmt_params,
+            )
 
     def compute_derivatives(
         self, u, x, z, u_new, x_new, z_new, params, E=None, include_params=False

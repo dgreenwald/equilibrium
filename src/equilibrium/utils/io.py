@@ -793,3 +793,310 @@ def load_sequence_result(
     if splice:
         return result.splice(T_max=T_max)
     return result
+
+
+def _to_camel_case(s: str) -> str:
+    """Convert underscore_case to camelCase."""
+    parts = s.split("_")
+    return parts[0] + "".join(word.capitalize() for word in parts[1:])
+
+
+def _write_latex_property_list(
+    data: dict[str, float],
+    path: Path,
+    prop_name: str,
+    command_str: str,
+    prefix: Optional[str] = None,
+    floatfmt: str = ".3f",
+) -> None:
+    """
+    Write a LaTeX3 property list file defining key-value pairs.
+
+    Parameters
+    ----------
+    data : dict[str, float]
+        Dictionary of variable/parameter names to values.
+    path : Path
+        Output file path.
+    prop_name : str
+        Name of the LaTeX property list (e.g., "g_equilibrium_steady_prop").
+    command_str : str
+        Name of the accessor command (e.g., "steady").
+    prefix : str, optional
+        Prefix to add to all keys (e.g., "baseline" → "baseline_K").
+    floatfmt : str, default ".3f"
+        Python format specification for float values.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\\ExplSyntaxOn\n")
+        # Only create prop/command if they don't exist
+        f.write(f"\\prop_if_exist:NF \\{prop_name} {{ \\prop_new:N \\{prop_name} }}\n")
+
+        for key, value in sorted(data.items()):
+            # Add prefix if specified
+            if prefix:
+                key_with_prefix = f"{prefix}_{key}"
+            else:
+                key_with_prefix = key
+
+            # Format the value
+            val_str = format(float(value), floatfmt)
+
+            # Escape special characters if needed
+            val_str = val_str.replace("{", "\\{").replace("}", "\\}")
+
+            f.write(
+                f"\\prop_gput:Nnn \\{prop_name} {{{key_with_prefix}}} {{{val_str}}}\n"
+            )
+
+        # Only create command if it doesn't exist
+        f.write(
+            f"\\cs_if_exist:NF \\{command_str} {{ "
+            f"\\cs_new:Npn \\{command_str} #1 {{ \\prop_item:Nn \\{prop_name} {{#1}} }} "
+            f"}}\n"
+        )
+        f.write("\\ExplSyntaxOff\n")
+
+
+def save_steady_values_to_latex(
+    label: str,
+    *,
+    save_dir: Optional[Path | str] = None,
+    tex_dir: Optional[Path | str] = None,
+    floatfmt: str = ".3f",
+    add_prefix: bool = True,
+    prefix: Optional[str] = None,
+    command_str: str = "steady",
+    prop_name: str = "g_equilibrium_steady_prop",
+) -> Path:
+    """
+    Export steady state values to a LaTeX property list file.
+
+    Reads steady state values from the saved JSON file and exports them to a
+    LaTeX file using LaTeX3 property lists. The generated file can be included
+    in LaTeX documents with \\input{file.tex} and values accessed with the
+    command defined by command_str (default: \\steady{label_variable}).
+
+    Parameters
+    ----------
+    label : str
+        Model label identifying the steady state file (e.g., 'baseline').
+        The file '{label}_steady_state.json' will be read.
+    save_dir : Path | str | None, optional
+        Directory containing the steady state JSON file. If None, uses the
+        configured save directory from settings.
+    tex_dir : Path | str | None, optional
+        Directory to write the .tex file. If None, uses {plot_dir}/tex/.
+    floatfmt : str, default ".3f"
+        Python format specification for float values (e.g., ".3f", ".4f", ".2e").
+    add_prefix : bool, default True
+        If True, prepend label to keys (e.g., "baseline_K"). If False, keys are
+        just variable names (e.g., "K"). Default is True to allow multiple models
+        to coexist in the same LaTeX document.
+    prefix : str, optional
+        Custom prefix for keys. If None and add_prefix=True, uses label.
+    command_str : str, default "steady"
+        Name of the LaTeX command for accessing values. All models share this
+        command and use the same property list.
+    prop_name : str, default "g_equilibrium_steady_prop"
+        Name of the LaTeX property list. All models share this property list.
+
+    Returns
+    -------
+    Path
+        Path to the written .tex file.
+
+    Raises
+    ------
+    FileNotFoundError
+        If the steady state JSON file doesn't exist.
+
+    Examples
+    --------
+    >>> # Basic usage (reads baseline_steady_state.json)
+    >>> save_steady_values_to_latex('baseline')
+    # Writes to {plot_dir}/tex/baseline_steady.tex
+
+    >>> # In LaTeX document:
+    # \\input{baseline_steady.tex}
+    # The steady state capital stock is $K^* = \\steady{baseline_K}$.
+
+    >>> # Multiple models with parameterized tables:
+    >>> save_steady_values_to_latex('baseline')
+    >>> save_steady_values_to_latex('alternative')
+    # \\newcommand{\\tableRow}[1]{%
+    #   \\steady{#1_K} & \\steady{#1_Y} & \\steady{#1_C} \\\\
+    # }
+    # \\tableRow{baseline}
+    # \\tableRow{alternative}
+
+    Notes
+    -----
+    - The source model must have been solved with save=True to create the JSON file.
+    - Multiple models can share the same property list and command without conflicts.
+    - Keys are prefixed with the label by default when add_prefix=True, but this is
+      often redundant since the property list itself provides namespacing.
+    """
+    # Read steady state values from JSON
+    steady_values = read_steady_values(label=label, save_dir=save_dir)
+
+    # Determine output directory
+    if tex_dir is None:
+        settings = get_settings()
+        tex_dir = settings.paths.plot_dir / "tex"
+    else:
+        tex_dir = Path(tex_dir)
+
+    # Determine output file path
+    output_path = tex_dir / f"{label}_steady.tex"
+
+    # Determine prefix for keys
+    if add_prefix:
+        key_prefix = prefix if prefix is not None else label
+    else:
+        key_prefix = None
+
+    # Write the LaTeX file
+    _write_latex_property_list(
+        data=steady_values,
+        path=output_path,
+        prop_name=prop_name,
+        command_str=command_str,
+        prefix=key_prefix,
+        floatfmt=floatfmt,
+    )
+
+    return output_path
+
+
+def save_calibrated_params_to_latex(
+    label: str,
+    *,
+    regime: Optional[int] = None,
+    save_dir: Optional[Path | str] = None,
+    tex_dir: Optional[Path | str] = None,
+    floatfmt: str = ".4f",
+    add_prefix: bool = True,
+    prefix: Optional[str] = None,
+    command_str: str = "param",
+    prop_name: str = "g_equilibrium_param_prop",
+) -> Path:
+    """
+    Export calibrated parameter values to a LaTeX property list file.
+
+    Reads calibrated parameter values from the saved JSON file and exports them
+    to a LaTeX file using LaTeX3 property lists. The generated file can be included
+    in LaTeX documents with \\input{file.tex} and values accessed with the
+    command defined by command_str (default: \\param{label_parameter}).
+
+    Parameters
+    ----------
+    label : str
+        Label identifying the calibration file (e.g., 'baseline').
+        The file '{label}_calibrated_params.json' will be read.
+    regime : int, optional
+        If specified, filter parameters for this regime and include regime suffix
+        in the output filename. Output will be '{label}_params_r{regime}.tex'.
+        If None, loads all parameters without filtering and outputs to
+        '{label}_params.tex'.
+    save_dir : Path | str | None, optional
+        Directory containing the calibration JSON file. If None, uses the
+        configured save directory from settings.
+    tex_dir : Path | str | None, optional
+        Directory to write the .tex file. If None, uses {plot_dir}/tex/.
+    floatfmt : str, default ".4f"
+        Python format specification for float values (e.g., ".3f", ".4f", ".2e").
+    add_prefix : bool, default True
+        If True, prepend label (and regime if applicable) to keys. If False, keys
+        are just parameter names. Default is True to allow multiple models to
+        coexist in the same LaTeX document.
+    prefix : str, optional
+        Custom prefix for keys. If None and add_prefix=True, uses label
+        (with "_r{regime}" suffix if regime is specified).
+    command_str : str, default "param"
+        Name of the LaTeX command for accessing values. All models share this
+        command and use the same property list.
+    prop_name : str, default "g_equilibrium_param_prop"
+        Name of the LaTeX property list. All models share this property list.
+
+    Returns
+    -------
+    Path
+        Path to the written .tex file.
+
+    Raises
+    ------
+    FileNotFoundError
+        If the calibration JSON file doesn't exist.
+
+    Examples
+    --------
+    >>> # Basic usage (all parameters)
+    >>> save_calibrated_params_to_latex('baseline')
+    # Writes to {plot_dir}/tex/baseline_params.tex
+
+    >>> # Regime-specific parameters
+    >>> save_calibrated_params_to_latex('baseline', regime=0)
+    # Writes to {plot_dir}/tex/baseline_params_r0.tex
+
+    >>> # In LaTeX document:
+    # \\input{baseline_params.tex}
+    # The discount factor is $\\beta = \\param{baseline_bet}$.
+
+    >>> # Multiple regimes:
+    >>> save_calibrated_params_to_latex('baseline', regime=0)
+    >>> save_calibrated_params_to_latex('baseline', regime=1)
+    # \\input{baseline_params_r0.tex}
+    # \\input{baseline_params_r1.tex}
+    # Regime 0: $\\tau = \\param{baseline_r0_tau}$
+    # Regime 1: $\\tau = \\param{baseline_r1_tau}$
+
+    Notes
+    -----
+    - The calibration must have been saved with save_calibrated_params().
+    - When regime is specified, regime-specific parameters are filtered and renamed
+      (e.g., "regime_tau_r0" becomes "tau").
+    - Multiple models and regimes can share the same property list and command.
+    """
+    # Read calibrated parameters from JSON
+    calibrated_params = read_calibrated_params(
+        label=label, save_dir=save_dir, regime=regime
+    )
+
+    # Determine output directory
+    if tex_dir is None:
+        settings = get_settings()
+        tex_dir = settings.paths.plot_dir / "tex"
+    else:
+        tex_dir = Path(tex_dir)
+
+    # Determine output file path (include regime suffix if specified)
+    if regime is not None:
+        output_path = tex_dir / f"{label}_params_r{regime}.tex"
+    else:
+        output_path = tex_dir / f"{label}_params.tex"
+
+    # Determine prefix for keys
+    if add_prefix:
+        if prefix is not None:
+            key_prefix = prefix
+        elif regime is not None:
+            key_prefix = f"{label}_r{regime}"
+        else:
+            key_prefix = label
+    else:
+        key_prefix = None
+
+    # Write the LaTeX file
+    _write_latex_property_list(
+        data=calibrated_params,
+        path=output_path,
+        prop_name=prop_name,
+        command_str=command_str,
+        prefix=key_prefix,
+        floatfmt=floatfmt,
+    )
+
+    return output_path
