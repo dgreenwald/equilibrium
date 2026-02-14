@@ -1,28 +1,46 @@
 """
 Plotting utilities for Equilibrium.
 
-The module currently exposes :func:`plot_paths`, which renders IRFs or other
-time-series panels with pagination support, :func:`plot_deterministic_results`, which
-plots DeterministicResult or SequenceResult objects, :func:`plot_model_irfs`, which
-plots IRFs from multiple Model objects for multiple shocks, :func:`plot_irf_results`,
-which plots IRFs from IrfResult dictionaries, and :func:`overlay_to_result`, which
-converts external data to DeterministicResult format for overlay plotting.
+The module exposes plotting functions for rendering time-series and IRF plots, as well
+as data preparation utilities for custom analysis workflows.
+
+Plotting Functions
+------------------
+- :func:`plot_paths`: Low-level rendering of time-series panels with pagination
+- :func:`plot_deterministic_results`: Plot DeterministicResult or SequenceResult objects
+- :func:`plot_model_irfs`: Plot IRFs from multiple Model objects
+- :func:`plot_irf_results`: Plot IRFs from IrfResult dictionaries
+- :class:`PlotSpec`: Styling container for plot customization
+
+Data Preparation
+----------------
+- :func:`prepare_deterministic_paths`: Prepare harmonized paths for plotting or analysis
+- :func:`overlay_to_result`: Convert external data to DeterministicResult format
+- :class:`PreparedPaths`: Container for prepared deterministic paths
 """
 
 from .plot import (
     PlotSpec,
-    overlay_to_result,
     plot_deterministic_results,
     plot_irf_results,
     plot_model_irfs,
     plot_paths,
 )
+from .preparation import (
+    PreparedPaths,
+    overlay_to_result,
+    prepare_deterministic_paths,
+)
 
 __all__ = [
+    # Plotting functions
     "plot_paths",
-    "PlotSpec",
     "plot_deterministic_results",
     "plot_model_irfs",
     "plot_irf_results",
+    "PlotSpec",
+    # Data preparation
+    "prepare_deterministic_paths",
+    "PreparedPaths",
     "overlay_to_result",
 ]
