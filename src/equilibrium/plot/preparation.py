@@ -366,7 +366,6 @@ def prepare_deterministic_paths(
     >>> data_peak = np.nanmax(overlay_series)
     """
     # Import here to avoid circular imports
-    from ..settings import get_settings
     from ..solvers.results import DeterministicResult, SequenceResult
     from ..utils.io import load_deterministic_result, load_sequence_result
 
@@ -438,7 +437,9 @@ def prepare_deterministic_paths(
     processed_results: List[DeterministicResult] = []
     if series_transforms:
         for result in results_list:
-            processed_results.append(result.transform(series_transforms=series_transforms))
+            processed_results.append(
+                result.transform(series_transforms=series_transforms)
+            )
     else:
         processed_results = results_list
 

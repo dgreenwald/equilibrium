@@ -519,8 +519,6 @@ def plot_paths(
     return saved_paths
 
 
-
-
 def _build_overlay_plot_spec(
     overlay_name: str,
     overlay_style: Optional[str],
