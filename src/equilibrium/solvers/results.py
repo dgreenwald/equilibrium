@@ -12,11 +12,14 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Mapping, Optional, Union
+from typing import TYPE_CHECKING, Any, Mapping, Optional, Union
 
 import numpy as np
 
 from ..io import load_results, resolve_output_path, save_results
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 logger = logging.getLogger(__name__)
 
@@ -282,6 +285,52 @@ class PathResult:
         if self.Y is None:
             raise KeyError(f"Series '{name}' is unavailable because Y is None.")
         return self.Y[:, idx]
+
+    def to_df(self) -> "pd.DataFrame":
+        """
+        Convert result to a pandas DataFrame with time index.
+
+        Returns
+        -------
+        pd.DataFrame
+            DataFrame with columns for all variables (UX, Z, and optionally Y).
+            Index is a RangeIndex representing time periods.
+
+        Raises
+        ------
+        ImportError
+            If pandas is not installed.
+
+        Examples
+        --------
+        >>> result = model.solve_steady()
+        >>> df = result.to_df()
+        >>> df['consumption'].plot()
+        """
+        try:
+            import pandas as pd
+        except ImportError as e:
+            raise ImportError(
+                "pandas is required for to_df(). " "Install it with: pip install pandas"
+            ) from e
+
+        # Build the dataframe
+        data = {}
+
+        # Add UX columns
+        for i, name in enumerate(self.var_names):
+            data[name] = self.UX[:, i]
+
+        # Add Z columns
+        for i, name in enumerate(self.exog_names):
+            data[name] = self.Z[:, i]
+
+        # Add Y columns if present
+        if self.Y is not None:
+            for i, name in enumerate(self.y_names):
+                data[name] = self.Y[:, i]
+
+        return pd.DataFrame(data)
 
     def _get_metadata(self) -> dict:
         """Get metadata dictionary for saving. Override in subclasses."""
@@ -972,3 +1021,40 @@ class SequenceResult:
             model_label=model_label,
             experiment_label=experiment_label,
         )
+
+    def to_df(self, T_max: Optional[int] = None) -> "pd.DataFrame":
+        """
+        Convert the spliced sequence result to a pandas DataFrame.
+
+        This is a convenience method that first splices the regimes together
+        and then converts the result to a DataFrame.
+
+        Parameters
+        ----------
+        T_max : int, optional
+            The total length of the spliced path (number of time periods).
+            If None, use a default computed from the regime lengths and
+            transition times.
+
+        Returns
+        -------
+        pd.DataFrame
+            DataFrame with columns for all variables from the spliced result.
+            Index is a RangeIndex representing time periods.
+
+        Raises
+        ------
+        ImportError
+            If pandas is not installed.
+        ValueError
+            If the sequence has no regimes, or if metadata is inconsistent
+            across regimes.
+
+        Examples
+        --------
+        >>> seq_result = deterministic.solve_sequence(spec, model, Nt=100)
+        >>> df = seq_result.to_df()
+        >>> df[['consumption', 'output']].plot()
+        """
+        spliced = self.splice(T_max=T_max)
+        return spliced.to_df()

@@ -539,6 +539,38 @@ class TestSequenceResult:
             assert path.exists()
             assert path == save_path
 
+    def test_sequence_result_to_df(self):
+        """Test converting SequenceResult to pandas DataFrame."""
+        pytest.importorskip("pandas")
+        import pandas as pd
+
+        from equilibrium.solvers import deterministic
+        from equilibrium.solvers.det_spec import DetSpec
+
+        mod = set_model()
+        mod.solve_steady(calibrate=True)
+        mod.linearize()
+
+        spec = DetSpec(n_regimes=2, time_list=[5])
+        spec.add_shock(0, "Z_til", 0, 0.1)
+        spec.add_shock(1, "Z_til", 0, 0.05)
+
+        result = deterministic.solve_sequence(spec, mod, Nt=10, save_results=False)
+
+        # Convert to DataFrame
+        df = result.to_df()
+
+        # Check that df is a DataFrame
+        assert isinstance(df, pd.DataFrame)
+
+        # Check that variables are present
+        assert "I" in df.columns
+        assert "log_K" in df.columns
+        assert "Z_til" in df.columns
+
+        # Check that df has reasonable length (spliced from two regimes)
+        assert len(df) > 0
+
 
 class TestReadSteadyValue:
     """Tests for read_steady_value function."""

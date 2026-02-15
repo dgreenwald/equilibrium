@@ -39,6 +39,9 @@ dev = [
   "mypy",
   "pre-commit",
 ]
+dataframe = [
+  "pandas>=1.5",
+]
 
 [project.scripts]
 equilibrium = "equilibrium.cli:main"

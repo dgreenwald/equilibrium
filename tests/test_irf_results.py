@@ -172,6 +172,103 @@ class TestPathResult:
             assert loaded.exog_names == result.exog_names
             assert loaded.y_names == result.y_names
 
+    def test_path_result_to_df(self):
+        """Test converting PathResult to pandas DataFrame."""
+        pytest.importorskip("pandas")
+        import pandas as pd
+
+        UX = np.random.randn(10, 2)
+        Z = np.random.randn(10, 1)
+        Y = np.random.randn(10, 3)
+
+        result = PathResult(
+            UX=UX,
+            Z=Z,
+            Y=Y,
+            var_names=["I", "log_K"],
+            exog_names=["Z_til"],
+            y_names=["y", "c", "K"],
+        )
+
+        df = result.to_df()
+
+        # Check that df is a DataFrame
+        assert isinstance(df, pd.DataFrame)
+
+        # Check that all variables are present
+        assert "I" in df.columns
+        assert "log_K" in df.columns
+        assert "Z_til" in df.columns
+        assert "y" in df.columns
+        assert "c" in df.columns
+        assert "K" in df.columns
+
+        # Check that data matches
+        assert np.allclose(df["I"].values, UX[:, 0])
+        assert np.allclose(df["log_K"].values, UX[:, 1])
+        assert np.allclose(df["Z_til"].values, Z[:, 0])
+        assert np.allclose(df["y"].values, Y[:, 0])
+        assert np.allclose(df["c"].values, Y[:, 1])
+        assert np.allclose(df["K"].values, Y[:, 2])
+
+        # Check shape
+        assert df.shape == (10, 6)
+
+    def test_path_result_to_df_without_y(self):
+        """Test converting PathResult to DataFrame without intermediate variables."""
+        pytest.importorskip("pandas")
+        import pandas as pd
+
+        UX = np.random.randn(10, 2)
+        Z = np.random.randn(10, 1)
+
+        result = PathResult(
+            UX=UX,
+            Z=Z,
+            var_names=["I", "log_K"],
+            exog_names=["Z_til"],
+        )
+
+        df = result.to_df()
+
+        # Check that df is a DataFrame
+        assert isinstance(df, pd.DataFrame)
+
+        # Check that only UX and Z variables are present
+        assert "I" in df.columns
+        assert "log_K" in df.columns
+        assert "Z_til" in df.columns
+
+        # Check shape
+        assert df.shape == (10, 3)
+
+    def test_path_result_to_df_raises_without_pandas(self, monkeypatch):
+        """Test that to_df raises ImportError when pandas is not available."""
+        UX = np.random.randn(10, 2)
+        Z = np.random.randn(10, 1)
+
+        result = PathResult(
+            UX=UX,
+            Z=Z,
+            var_names=["I", "log_K"],
+            exog_names=["Z_til"],
+        )
+
+        # Mock the import to fail
+        import builtins
+
+        real_import = builtins.__import__
+
+        def mock_import(name, *args, **kwargs):
+            if name == "pandas":
+                raise ImportError("No module named 'pandas'")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", mock_import)
+
+        with pytest.raises(ImportError, match="pandas is required"):
+            result.to_df()
+
 
 class TestIrfResult:
     """Tests for the IrfResult class."""
