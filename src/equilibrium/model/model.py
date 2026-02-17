@@ -223,6 +223,15 @@ class Model:
     def rules(self, value):
         self.core.rules = self._normalize_rules(value)
 
+    @property
+    def derived_param_list(self) -> list[str]:
+        """Variable names defined via derived_param rules."""
+        # After finalize(), keys are saved to _derived_param_list before the
+        # category is cleared by the merge into intermediate.
+        if hasattr(self, "_derived_param_list"):
+            return self._derived_param_list
+        return list(self.rules["derived_param"].keys())
+
     def add_block(
         self,
         block: "BaseModelBlock | ModelBlock | None" = None,
@@ -408,6 +417,17 @@ class Model:
 
         # Validate that there are no duplicate keys across rule categories
         self._validate_unique_rule_keys()
+
+        # Validate no derived_param key conflicts with existing params values
+        overlap = set(self.rules["derived_param"].keys()) & set(self.params.keys())
+        if overlap:
+            raise ValueError(
+                f"Variables in 'derived_param' rules conflict with existing params: {overlap}. "
+                "A variable cannot be both a fixed parameter value and a derived expression."
+            )
+
+        # Save the derived_param list before _update_rules() merges and clears it
+        self._derived_param_list = list(self.rules["derived_param"].keys())
 
         # Set up initial guess for steady state
         self.init_dict = self.params.copy()
@@ -1868,11 +1888,16 @@ class Model:
         steady_values = io.read_steady_values(label=self.label)
 
         # Separate variables and parameters
+        derived = set(self.derived_param_list)
         vars_dict = {
-            key: value for key, value in steady_values.items() if key not in self.params
+            key: value
+            for key, value in steady_values.items()
+            if key not in self.params and key not in derived
         }
         params_dict = {
-            key: value for key, value in steady_values.items() if key in self.params
+            key: value
+            for key, value in steady_values.items()
+            if key in self.params or key in derived
         }
 
         # Determine output directory
@@ -2471,6 +2496,14 @@ class Model:
                     param_name = f"{var}_STEADY"
                     if param_name not in self.params:
                         self.params[param_name] = 0.0
+
+        # Merge derived_param into intermediate before dependency sorting,
+        # then clear it so steady sub-models don't see duplicate keys.
+        if self.rules["derived_param"]:
+            self.rules["intermediate"] = (
+                self.rules["intermediate"] + self.rules["derived_param"]
+            )
+            self.rules["derived_param"] = MyOrderedDict()
 
         ignore_vars = (
             list(

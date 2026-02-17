@@ -7,6 +7,7 @@ breaking circular dependencies between modules.
 # Standard rule categories for economic models
 RULE_KEYS = (
     "intermediate",
+    "derived_param",
     "read_expectations",
     "transition",
     "expectations",
@@ -18,6 +19,7 @@ RULE_KEYS = (
 # Rule keys requiring unique variable names across categories
 UNIQUE_RULE_KEYS = (
     "intermediate",
+    "derived_param",
     "read_expectations",
     "transition",
     "expectations",

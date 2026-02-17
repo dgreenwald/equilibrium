@@ -104,6 +104,7 @@ def test_unique_rule_keys_class_constant():
         "expectations",
         "optimality",
         "intermediate",
+        "derived_param",
         "read_expectations",
     }
     assert set(Model.UNIQUE_RULE_KEYS) == expected
