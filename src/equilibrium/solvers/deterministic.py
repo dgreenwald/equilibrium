@@ -8,8 +8,9 @@ Created on Thu Nov 24 10:13:04 2022
 
 # import jax
 import logging
+import re
 from pathlib import Path
-from typing import Optional, Union
+from typing import Optional, Sequence, Union
 
 import numpy as np
 import scipy.sparse as sp
@@ -23,6 +24,46 @@ logger = logging.getLogger(__name__)
 ALGORITHM_LBJ = "LBJ"
 ALGORITHM_SPARSE = "sparse"
 VALID_ALGORITHMS = (ALGORITHM_LBJ, ALGORITHM_SPARSE)
+
+
+def _slug_label_component(component: str) -> str:
+    """Return a filesystem/LaTeX-friendly label component."""
+    component = re.sub(r"\s+", "_", component.strip())
+    component = re.sub(r"[^A-Za-z0-9_-]", "_", component)
+    component = re.sub(r"_+", "_", component)
+    component = component.strip("_")
+    return component or "unnamed"
+
+
+def _build_regime_steady_label(
+    model_label: str,
+    experiment_label: str,
+    regime_idx: int,
+    regime_name: Optional[str] = None,
+) -> str:
+    """
+    Build a unique, readable steady-state label for a deterministic regime.
+    """
+    model_part = _slug_label_component(model_label or "_default")
+    experiment_part = _slug_label_component(experiment_label or "_default")
+    label = f"{model_part}__{experiment_part}__r{regime_idx:02d}"
+    if regime_name:
+        label = f"{label}__{_slug_label_component(regime_name)}"
+    return label
+
+
+def _save_regime_steady_outputs(mod, label: str, save_tex: bool = False) -> None:
+    """
+    Save steady-state JSON and optional LaTeX exports for a regime label.
+    """
+    original_label = mod.label
+    try:
+        mod.label = label
+        mod._save_steady_snapshot()
+        if save_tex:
+            mod.export_steady_to_latex()
+    finally:
+        mod.label = original_label
 
 
 def compute_time_period(
@@ -809,6 +850,9 @@ def solve_sequence(
     display_steady: bool = False,
     save_results: bool = True,
     copy_model: bool = False,
+    save_regime_steady: bool = False,
+    save_regime_steady_tex: bool = False,
+    regime_labels: Optional[Sequence[str]] = None,
 ):
     """
     Solve a sequence of deterministic paths for multiple regimes.
@@ -875,6 +919,15 @@ def solve_sequence(
     copy_model : bool, default False
         If True, operate on a copy of ``mod`` so the original model is not
         mutated by steady-state or linearization updates.
+    save_regime_steady : bool, default False
+        If True, save steady-state snapshots for each regime model using
+        deterministic sequence labels.
+    save_regime_steady_tex : bool, default False
+        If True, also export regime steady states to LaTeX files. This
+        implies steady-state JSON snapshots are also written.
+    regime_labels : sequence[str], optional
+        Optional human-readable names (one per regime) appended to each
+        regime steady-state label.
 
     Returns
     -------
@@ -885,6 +938,11 @@ def solve_sequence(
 
     if det_spec.n_regimes == 0:
         raise ValueError("DetSpec must have at least one regime")
+    if regime_labels is not None and len(regime_labels) != det_spec.n_regimes:
+        raise ValueError(
+            "regime_labels length must match det_spec.n_regimes: "
+            f"{len(regime_labels)} != {det_spec.n_regimes}"
+        )
 
     # Optionally work on a copy so callers can reuse the original model without mutation.
     # update_copy preserves shared JAX bundles to avoid recompilation.
@@ -926,6 +984,10 @@ def solve_sequence(
         current_ux_init = np.asarray(ux_init)
     prev_preset_par = None
     start_time = 1
+    should_save_regime_steady = save_regime_steady or save_regime_steady_tex
+    model_label = getattr(mod, "label", "_default")
+    experiment_label = getattr(det_spec, "label", "_default")
+    regime_steady_labels: list[str] = []
 
     for regime in range(det_spec.n_regimes):
         # Get preset parameters for this regime.
@@ -949,6 +1011,23 @@ def solve_sequence(
                 calibrate=recalibrate_regimes, display=display_steady
             )
             current_mod.linearize()
+        elif regime == 0:
+            current_mod = base_mod
+
+        if should_save_regime_steady:
+            regime_name = regime_labels[regime] if regime_labels is not None else None
+            regime_steady_label = _build_regime_steady_label(
+                model_label=model_label,
+                experiment_label=experiment_label,
+                regime_idx=regime,
+                regime_name=regime_name,
+            )
+            _save_regime_steady_outputs(
+                current_mod,
+                regime_steady_label,
+                save_tex=save_regime_steady_tex,
+            )
+            regime_steady_labels.append(regime_steady_label)
 
         # Build exogenous paths for this regime
         Z_path = det_spec.build_exog_paths(
@@ -1013,13 +1092,12 @@ def solve_sequence(
         # Remember current params for comparison
         prev_preset_par = current_preset_par
 
-    model_label = getattr(mod, "label", "_default")
-    experiment_label = getattr(det_spec, "label", "_default")
     sequence_result = SequenceResult(
         regimes=regime_results,
         time_list=list(det_spec.time_list),
         model_label=model_label,
         experiment_label=experiment_label,
+        regime_steady_labels=regime_steady_labels,
     )
 
     if save_results:

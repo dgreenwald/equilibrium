@@ -683,12 +683,15 @@ class SequenceResult:
         Base model label.
     experiment_label : str
         Experiment/scenario label for this sequence.
+    regime_steady_labels : list[str]
+        Regime steady-state labels written by sequence solvers when enabled.
     """
 
     regimes: list[DeterministicResult] = field(default_factory=list)
     time_list: list[int] = field(default_factory=list)
     model_label: str = "_default"
     experiment_label: str = "_default"
+    regime_steady_labels: list[str] = field(default_factory=list)
 
     @property
     def n_regimes(self) -> int:
@@ -947,6 +950,7 @@ class SequenceResult:
             "experiment_label": self.experiment_label,
             "n_regimes": self.n_regimes,
             "time_list": self.time_list,
+            "regime_steady_labels": self.regime_steady_labels,
             "regime_metadata": regime_metadata,
             "result_type": "SequenceResult",
         }
@@ -995,6 +999,7 @@ class SequenceResult:
         regime_metadata = metadata.get("regime_metadata", [])
         model_label = metadata.get("model_label", "_default")
         experiment_label = metadata.get("experiment_label", "_default")
+        regime_steady_labels = metadata.get("regime_steady_labels", [])
 
         regimes = []
         for i in range(n_regimes):
@@ -1020,6 +1025,7 @@ class SequenceResult:
             time_list=time_list,
             model_label=model_label,
             experiment_label=experiment_label,
+            regime_steady_labels=regime_steady_labels,
         )
 
     def to_df(self, T_max: Optional[int] = None) -> "pd.DataFrame":

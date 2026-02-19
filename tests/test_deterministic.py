@@ -7,6 +7,7 @@ Created on Wed Oct 26 10:00:12 2022
 """
 
 import os
+from pathlib import Path
 
 import jax
 import numpy as np
@@ -469,6 +470,90 @@ def test_solve_sequence_regime_parameter_change():
     N_ux = mod.N["u"] + mod.N["x"]
     assert result.regimes[0].UX.shape == (Nt, N_ux)
     assert result.regimes[1].UX.shape == (Nt, N_ux)
+
+
+def test_solve_sequence_save_regime_steady_outputs(tmp_path):
+    """Test optional saving of regime steady-state JSON and LaTeX outputs."""
+    from equilibrium.solvers.det_spec import DetSpec
+
+    settings = get_settings()
+    old_save_dir = settings.paths.save_dir
+    old_plot_dir = settings.paths.plot_dir
+    settings.paths.save_dir = tmp_path / "save"
+    settings.paths.plot_dir = tmp_path / "plot"
+
+    try:
+        mod = set_model(label="det_model")
+        mod.solve_steady(calibrate=True)
+        mod.linearize()
+
+        spec = DetSpec(n_regimes=2, time_list=[5], label="tax_shift")
+        spec.add_regime(0, preset_par_regime={})
+        spec.add_regime(
+            1,
+            preset_par_regime={"bet": mod.params["bet"] + 0.01},
+            time_regime=5,
+        )
+
+        result = deterministic.solve_sequence(
+            spec,
+            mod,
+            Nt=12,
+            save_results=False,
+            save_regime_steady=True,
+            save_regime_steady_tex=True,
+            regime_labels=["baseline", "higher_beta"],
+        )
+
+        expected_labels = [
+            "det_model__tax_shift__r00__baseline",
+            "det_model__tax_shift__r01__higher_beta",
+        ]
+        assert result.regime_steady_labels == expected_labels
+
+        tex_dir = settings.paths.plot_dir / "tex"
+        for label in expected_labels:
+            steady_json = settings.paths.save_dir / f"{label}_steady_state.json"
+            steady_tex = tex_dir / f"{label}_steady.tex"
+            params_tex = tex_dir / f"{label}_params.tex"
+            assert steady_json.exists()
+            assert steady_tex.exists()
+            assert params_tex.exists()
+    finally:
+        settings.paths.save_dir = old_save_dir
+        settings.paths.plot_dir = old_plot_dir
+
+
+def test_solve_sequence_regime_steady_labels_roundtrip(tmp_path):
+    """Test SequenceResult save/load preserves regime_steady_labels."""
+    from equilibrium.solvers.det_spec import DetSpec
+    from equilibrium.solvers.results import SequenceResult
+
+    mod = set_model(label="det_model")
+    mod.solve_steady(calibrate=True)
+    mod.linearize()
+
+    spec = DetSpec(n_regimes=2, time_list=[4], label="roundtrip")
+    spec.add_regime(0, preset_par_regime={})
+    spec.add_regime(
+        1,
+        preset_par_regime={"bet": mod.params["bet"] + 0.01},
+        time_regime=4,
+    )
+
+    result = deterministic.solve_sequence(
+        spec,
+        mod,
+        Nt=10,
+        save_results=False,
+        save_regime_steady=True,
+        regime_labels=["base", "alt"],
+    )
+    path = Path(tmp_path) / "sequence_with_regime_labels.npz"
+    result.save(path, overwrite=True)
+
+    loaded = SequenceResult.load(path)
+    assert loaded.regime_steady_labels == result.regime_steady_labels
 
 
 def test_solve_sequence_initial_conditions():

@@ -9,9 +9,11 @@ the linearized model dynamics.
 
 import logging
 from pathlib import Path
-from typing import Optional, Union
+from typing import Optional, Sequence, Union
 
 import numpy as np
+
+from .deterministic import _build_regime_steady_label, _save_regime_steady_outputs
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +31,9 @@ def solve_sequence_linear(
     save_format: str = "npz",
     display_steady: bool = False,
     copy_model: bool = False,
+    save_regime_steady: bool = False,
+    save_regime_steady_tex: bool = False,
+    regime_labels: Optional[Sequence[str]] = None,
 ):
     """
     Solve a sequence of deterministic paths for multiple regimes using the linear model.
@@ -86,6 +91,15 @@ def solve_sequence_linear(
     copy_model : bool, default False
         If True, operate on a copy of ``mod`` so the original model is not
         mutated by steady-state or linearization updates.
+    save_regime_steady : bool, default False
+        If True, save steady-state snapshots for each regime model using
+        deterministic sequence labels.
+    save_regime_steady_tex : bool, default False
+        If True, also export regime steady states to LaTeX files. This
+        implies steady-state JSON snapshots are also written.
+    regime_labels : sequence[str], optional
+        Optional human-readable names (one per regime) appended to each
+        regime steady-state label.
 
     Returns
     -------
@@ -96,6 +110,11 @@ def solve_sequence_linear(
 
     if det_spec.n_regimes == 0:
         raise ValueError("DetSpec must have at least one regime")
+    if regime_labels is not None and len(regime_labels) != det_spec.n_regimes:
+        raise ValueError(
+            "regime_labels length must match det_spec.n_regimes: "
+            f"{len(regime_labels)} != {det_spec.n_regimes}"
+        )
 
     # Optionally work on a copy so callers can reuse the original model without mutation.
     # update_copy preserves shared JAX bundles to avoid recompilation.
@@ -129,6 +148,10 @@ def solve_sequence_linear(
         current_ux_init = np.asarray(ux_init)
     prev_preset_par = None
     start_time = 1
+    should_save_regime_steady = save_regime_steady or save_regime_steady_tex
+    model_label = getattr(mod, "label", "_default")
+    experiment_label = getattr(det_spec, "label", "_default")
+    regime_steady_labels: list[str] = []
 
     def _compute_initial_intermediates(mod_for_init, ux_init_for_y, z_init_for_y):
         if not hasattr(mod_for_init, "intermediates"):
@@ -170,6 +193,21 @@ def solve_sequence_linear(
             # First regime with no parameter changes - use baseline copy
             # Note: base_mod's steady state and linearization have already been done by the checks before the loop
             current_mod = base_mod
+
+        if should_save_regime_steady:
+            regime_name = regime_labels[regime] if regime_labels is not None else None
+            regime_steady_label = _build_regime_steady_label(
+                model_label=model_label,
+                experiment_label=experiment_label,
+                regime_idx=regime,
+                regime_name=regime_name,
+            )
+            _save_regime_steady_outputs(
+                current_mod,
+                regime_steady_label,
+                save_tex=save_regime_steady_tex,
+            )
+            regime_steady_labels.append(regime_steady_label)
 
         # Build exogenous paths for this regime
         Z_path = det_spec.build_exog_paths(
@@ -266,13 +304,12 @@ def solve_sequence_linear(
         # Remember current params for comparison
         prev_preset_par = current_preset_par
 
-    model_label = getattr(mod, "label", "_default")
-    experiment_label = getattr(det_spec, "label", "_default")
     sequence_result = SequenceResult(
         regimes=regime_results,
         time_list=list(det_spec.time_list),
         model_label=model_label,
         experiment_label=experiment_label,
+        regime_steady_labels=regime_steady_labels,
     )
 
     if save_path is not None:
