@@ -421,6 +421,7 @@ def _build_param_to_model(
     calib_params: list[Union[ModelParam, ShockParam, RegimeParam]],
     template_spec: Union[DetSpec, LinearSpec],
     suppress_solver_output: bool,
+    calibrate_initial: bool,
 ) -> tuple[Callable, np.ndarray, list[tuple], list[str]]:
     """
     Build an efficient internal ``param_to_model`` callback from declarative
@@ -515,10 +516,10 @@ def _build_param_to_model(
 
     # If no model params, solve the base model once
     if n_mp == 0:
-        # Ensure base model is solved and linearised
+        # Ensure base model is solved and linearized
         if not getattr(model, "_linearized", False):
             with _suppress_solver_output(suppress_solver_output):
-                model.solve_steady(calibrate=False, display=False)
+                model.solve_steady(calibrate=calibrate_initial, display=False)
                 model.linearize()
         _cache["model"] = model
 
@@ -535,7 +536,7 @@ def _build_param_to_model(
                 param_dict = {mp.name: float(v) for mp, v in zip(model_params, mp_vals)}
                 new_model = model.update_copy(params=param_dict)
                 with _suppress_solver_output(suppress_solver_output):
-                    new_model.solve_steady(calibrate=False, display=False)
+                    new_model.solve_steady(calibrate=calibrate_initial, display=False)
                     new_model.linearize()
                 _cache["model"] = new_model
                 _cache["model_param_vals"] = mp_vals.copy()
@@ -556,6 +557,7 @@ def calibrate(
     targets: List[Union[PointTarget, FunctionalTarget]],
     calib_params: list[Union[ModelParam, ShockParam, RegimeParam]],
     solver: str = "deterministic",
+    calibrate_initial: bool = True,
     spec: Union[DetSpec, LinearSpec] = None,
     bounds: Optional[List[tuple]] = None,
     method: Optional[str] = None,
@@ -591,6 +593,11 @@ def calibrate(
         ``[...model_params, ...regime_params, ...shock_params]``.
     solver : str, default "deterministic"
         Solver to use: "deterministic", "linear_irf", or "linear_sequence".
+    calibrate_initial : bool, default True
+        Whether to apply calibration rules when pre-solving candidate model
+        steady states during calibration. This should generally match the
+        sequence-solver ``calibrate_initial`` behavior to avoid redundant
+        re-solving due to calibration-mode mismatch.
     spec : DetSpec or LinearSpec
         Template specification. For deterministic/linear_sequence: ``DetSpec``.
         For linear_irf: ``LinearSpec``. Shock values from ``ShockParam`` and
@@ -680,9 +687,26 @@ def calibrate(
     if solver not in valid_solvers:
         raise ValueError(f"Unknown solver: {solver}. Must be one of {valid_solvers}.")
 
+    # Backward compatibility: if provided in solver_kwargs, use it but warn that
+    # the explicit calibrate() argument is preferred.
+    if "calibrate_initial" in solver_kwargs:
+        passed_ci = solver_kwargs.pop("calibrate_initial")
+        if passed_ci != calibrate_initial:
+            logger.warning(
+                "Both calibrate_initial argument (%s) and solver_kwargs['calibrate_initial'] (%s) "
+                "were provided; using the explicit calibrate() argument.",
+                calibrate_initial,
+                passed_ci,
+            )
+        else:
+            logger.info(
+                "Received calibrate_initial in solver_kwargs; use calibrate(..., calibrate_initial=...) "
+                "instead."
+            )
+
     # Build internal callback from declarative calib_params
     param_to_model, initial_params, auto_bounds, param_names = _build_param_to_model(
-        model, calib_params, spec, suppress_solver_output
+        model, calib_params, spec, suppress_solver_output, calibrate_initial
     )
 
     # Use auto-bounds from calib_params if user didn't pass explicit bounds

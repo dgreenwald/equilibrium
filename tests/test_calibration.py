@@ -23,6 +23,7 @@ from equilibrium.solvers.calibration import (
     ModelParam,
     PointTarget,
     ShockParam,
+    _build_param_to_model,
     calibrate,
 )
 from equilibrium.solvers.det_spec import DetSpec
@@ -522,6 +523,99 @@ class TestCalibrationValidation:
                 solver="invalid_solver",
                 spec=DetSpec(Nt=10),
             )
+
+
+class TestParamToModelCalibrationMode:
+    """Tests for calibration mode propagation in _build_param_to_model."""
+
+    @staticmethod
+    def _make_stub_model():
+        class StubModel:
+            def __init__(self):
+                self.params = {"bet": 0.95}
+                self.exog_list = []
+                self._linearized = False
+                self.solve_calls = []
+                self.linearize_calls = 0
+
+            def solve_steady(self, *, calibrate=False, display=False):
+                self.solve_calls.append(bool(calibrate))
+
+            def linearize(self):
+                self._linearized = True
+                self.linearize_calls += 1
+
+            def update_copy(self, params=None):
+                new_model = StubModel()
+                if params:
+                    new_model.params.update(params)
+                return new_model
+
+        return StubModel()
+
+    def test_build_param_to_model_uses_calibrate_initial_true(self, monkeypatch):
+        """Pre-solve should use calibrate=True when calibrate_initial=True."""
+        base_model = self._make_stub_model()
+        calls: list[bool] = []
+
+        original_update_copy = base_model.update_copy
+
+        def wrapped_update_copy(*args, **kwargs):
+            new_model = original_update_copy(*args, **kwargs)
+            original_solve_steady = new_model.solve_steady
+
+            def wrapped_solve_steady(*s_args, **s_kwargs):
+                calls.append(bool(s_kwargs.get("calibrate", False)))
+                return original_solve_steady(*s_args, **s_kwargs)
+
+            monkeypatch.setattr(new_model, "solve_steady", wrapped_solve_steady)
+            return new_model
+
+        monkeypatch.setattr(base_model, "update_copy", wrapped_update_copy)
+
+        param_to_model, initial_params, _, _ = _build_param_to_model(
+            model=base_model,
+            calib_params=[ModelParam("bet", initial=0.95, bounds=(0.9, 0.99))],
+            template_spec=DetSpec(Nt=10),
+            suppress_solver_output=True,
+            calibrate_initial=True,
+        )
+
+        param_to_model(initial_params)
+        assert calls
+        assert calls[-1] is True
+
+    def test_build_param_to_model_uses_calibrate_initial_false(self, monkeypatch):
+        """Pre-solve should use calibrate=False when calibrate_initial=False."""
+        base_model = self._make_stub_model()
+        calls: list[bool] = []
+
+        original_update_copy = base_model.update_copy
+
+        def wrapped_update_copy(*args, **kwargs):
+            new_model = original_update_copy(*args, **kwargs)
+            original_solve_steady = new_model.solve_steady
+
+            def wrapped_solve_steady(*s_args, **s_kwargs):
+                calls.append(bool(s_kwargs.get("calibrate", False)))
+                return original_solve_steady(*s_args, **s_kwargs)
+
+            monkeypatch.setattr(new_model, "solve_steady", wrapped_solve_steady)
+            return new_model
+
+        monkeypatch.setattr(base_model, "update_copy", wrapped_update_copy)
+
+        param_to_model, initial_params, _, _ = _build_param_to_model(
+            model=base_model,
+            calib_params=[ModelParam("bet", initial=0.95, bounds=(0.9, 0.99))],
+            template_spec=DetSpec(Nt=10),
+            suppress_solver_output=True,
+            calibrate_initial=False,
+        )
+
+        param_to_model(initial_params)
+        assert calls
+        assert calls[-1] is False
 
 
 class TestCalibrationResult:
