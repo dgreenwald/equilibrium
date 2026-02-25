@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import tempfile
 import time
 from pathlib import Path
@@ -14,6 +15,35 @@ from ..settings import get_settings
 
 if TYPE_CHECKING:
     from ..solvers.results import DeterministicResult, IrfResult, SequenceResult
+
+
+def _slug_label_component(component: str) -> str:
+    """Return a filesystem/LaTeX-friendly label component."""
+    component = re.sub(r"\s+", "_", component.strip())
+    component = re.sub(r"[^A-Za-z0-9_-]", "_", component)
+    component = re.sub(r"_+", "_", component)
+    component = component.strip("_")
+    return component or "unnamed"
+
+
+def build_regime_steady_label(
+    model_label: str,
+    experiment_label: str,
+    regime_idx: int,
+    regime_name: Optional[str] = None,
+) -> str:
+    """
+    Build a unique, readable steady-state label for a deterministic regime.
+
+    This matches the naming convention used by the deterministic multi-regime
+    solver when `save_regime_steady=True`.
+    """
+    model_part = _slug_label_component(model_label or "_default")
+    experiment_part = _slug_label_component(experiment_label or "_default")
+    label = f"{model_part}__{experiment_part}__r{regime_idx:02d}"
+    if regime_name:
+        label = f"{label}__{_slug_label_component(regime_name)}"
+    return label
 
 
 def _json_dumps_canonical(obj: Any) -> str:
@@ -287,6 +317,148 @@ def read_steady_values(
         ) from None
 
     return {key: float(value) for key, value in data.items()}
+
+
+def _resolve_regime_steady_label(
+    *,
+    model_label: str,
+    experiment_label: str,
+    regime_idx: int,
+    regime_name: Optional[str],
+    save_dir: Path,
+) -> str:
+    if regime_name is not None:
+        return build_regime_steady_label(
+            model_label=model_label,
+            experiment_label=experiment_label,
+            regime_idx=regime_idx,
+            regime_name=regime_name,
+        )
+
+    base = build_regime_steady_label(
+        model_label=model_label,
+        experiment_label=experiment_label,
+        regime_idx=regime_idx,
+        regime_name=None,
+    )
+    base_path = save_dir / f"{base}_steady_state.json"
+    if base_path.exists():
+        return base
+
+    matches = sorted(save_dir.glob(f"{base}__*_steady_state.json"))
+    if len(matches) == 1:
+        return matches[0].name[: -len("_steady_state.json")]
+    if len(matches) == 0:
+        return base
+
+    candidates = [p.name[: -len("_steady_state.json")] for p in matches]
+    raise ValueError(
+        "Multiple steady-state files match the requested regime. "
+        "Pass `regime_name=` to disambiguate. "
+        f"Candidates: {candidates}"
+    )
+
+
+def read_regime_steady_value(
+    *,
+    model_label: str,
+    experiment_label: str,
+    regime_idx: int,
+    variable: str,
+    regime_name: Optional[str] = None,
+    default: Optional[float] = None,
+    save_dir: Optional[Path | str] = None,
+) -> float:
+    """
+    Read a steady-state value for a deterministic regime.
+
+    Parameters
+    ----------
+    model_label : str
+        Base model label used for the deterministic solve.
+    experiment_label : str
+        Experiment label, typically `DetSpec.label`.
+    regime_idx : int
+        Zero-based regime index.
+    variable : str
+        Variable name to retrieve from the steady state JSON.
+    regime_name : str | None, optional
+        Optional regime name (e.g., from `regime_labels` in `solve_sequence`).
+        If omitted, this function will try the unnamed regime label first and,
+        if not found, will look for a unique matching file with a regime name
+        suffix.
+    default : float | None, optional
+        Default value to return if the file or variable is not found.
+    save_dir : Path | str | None, optional
+        Directory containing steady state files. If None, uses the configured
+        save directory from settings.
+    """
+    if save_dir is None:
+        settings = get_settings()
+        save_dir_path = settings.paths.save_dir
+    else:
+        save_dir_path = Path(save_dir)
+
+    label = _resolve_regime_steady_label(
+        model_label=model_label,
+        experiment_label=experiment_label,
+        regime_idx=regime_idx,
+        regime_name=regime_name,
+        save_dir=save_dir_path,
+    )
+    return read_steady_value(
+        label=label,
+        variable=variable,
+        default=default,
+        save_dir=save_dir_path,
+    )
+
+
+def read_regime_steady_values(
+    *,
+    model_label: str,
+    experiment_label: str,
+    regime_idx: int,
+    regime_name: Optional[str] = None,
+    default: Optional[dict[str, float]] = None,
+    save_dir: Optional[Path | str] = None,
+) -> dict[str, float]:
+    """
+    Read all steady-state values for a deterministic regime.
+
+    Parameters
+    ----------
+    model_label : str
+        Base model label used for the deterministic solve.
+    experiment_label : str
+        Experiment label, typically `DetSpec.label`.
+    regime_idx : int
+        Zero-based regime index.
+    regime_name : str | None, optional
+        Optional regime name (e.g., from `regime_labels` in `solve_sequence`).
+        If omitted, this function will try the unnamed regime label first and,
+        if not found, will look for a unique matching file with a regime name
+        suffix.
+    default : dict[str, float] | None, optional
+        Default dictionary to return if file not found.
+    save_dir : Path | str | None, optional
+        Directory containing steady state files. If None, uses the configured
+        save directory from settings.
+    """
+    if save_dir is None:
+        settings = get_settings()
+        save_dir_path = settings.paths.save_dir
+    else:
+        save_dir_path = Path(save_dir)
+
+    label = _resolve_regime_steady_label(
+        model_label=model_label,
+        experiment_label=experiment_label,
+        regime_idx=regime_idx,
+        regime_name=regime_name,
+        save_dir=save_dir_path,
+    )
+    return read_steady_values(label=label, default=default, save_dir=save_dir_path)
 
 
 def read_calibrated_params(

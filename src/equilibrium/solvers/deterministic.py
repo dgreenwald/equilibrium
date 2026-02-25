@@ -8,13 +8,14 @@ Created on Thu Nov 24 10:13:04 2022
 
 # import jax
 import logging
-import re
 from pathlib import Path
 from typing import Optional, Sequence, Union
 
 import numpy as np
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
+
+from ..utils.io import build_regime_steady_label
 
 # from py_tools.utilities import tic, toc
 
@@ -26,15 +27,6 @@ ALGORITHM_SPARSE = "sparse"
 VALID_ALGORITHMS = (ALGORITHM_LBJ, ALGORITHM_SPARSE)
 
 
-def _slug_label_component(component: str) -> str:
-    """Return a filesystem/LaTeX-friendly label component."""
-    component = re.sub(r"\s+", "_", component.strip())
-    component = re.sub(r"[^A-Za-z0-9_-]", "_", component)
-    component = re.sub(r"_+", "_", component)
-    component = component.strip("_")
-    return component or "unnamed"
-
-
 def _build_regime_steady_label(
     model_label: str,
     experiment_label: str,
@@ -42,14 +34,16 @@ def _build_regime_steady_label(
     regime_name: Optional[str] = None,
 ) -> str:
     """
-    Build a unique, readable steady-state label for a deterministic regime.
+    Backwards-compatible alias for regime steady-state label construction.
+
+    Prefer `equilibrium.utils.io.build_regime_steady_label` in new code.
     """
-    model_part = _slug_label_component(model_label or "_default")
-    experiment_part = _slug_label_component(experiment_label or "_default")
-    label = f"{model_part}__{experiment_part}__r{regime_idx:02d}"
-    if regime_name:
-        label = f"{label}__{_slug_label_component(regime_name)}"
-    return label
+    return build_regime_steady_label(
+        model_label=model_label,
+        experiment_label=experiment_label,
+        regime_idx=regime_idx,
+        regime_name=regime_name,
+    )
 
 
 def _save_regime_steady_outputs(mod, label: str, save_tex: bool = False) -> None:
@@ -1016,7 +1010,7 @@ def solve_sequence(
 
         if should_save_regime_steady:
             regime_name = regime_labels[regime] if regime_labels is not None else None
-            regime_steady_label = _build_regime_steady_label(
+            regime_steady_label = build_regime_steady_label(
                 model_label=model_label,
                 experiment_label=experiment_label,
                 regime_idx=regime,

@@ -11,7 +11,12 @@ import jax
 import numpy as np
 import pytest
 
-from equilibrium import Model, read_steady_value, read_steady_values
+from equilibrium import (
+    Model,
+    build_regime_steady_label,
+    read_steady_value,
+    read_steady_values,
+)
 from equilibrium.io import load_results, resolve_output_path, save_results
 
 jax.config.update("jax_enable_x64", True)
@@ -757,6 +762,17 @@ class TestReadSteadyValue:
                 save_dir=tmpdir,
             )
             assert values == default
+
+
+class TestBuildRegimeSteadyLabel:
+    def test_slugging_and_format(self):
+        label = build_regime_steady_label(
+            model_label="My Model",
+            experiment_label="Tax shift!",
+            regime_idx=3,
+            regime_name="régime #1",
+        )
+        assert label == "My_Model__Tax_shift__r03__r_gime_1"
 
 
 if __name__ == "__main__":

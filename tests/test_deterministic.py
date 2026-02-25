@@ -475,6 +475,7 @@ def test_solve_sequence_regime_parameter_change():
 def test_solve_sequence_save_regime_steady_outputs(tmp_path):
     """Test optional saving of regime steady-state JSON and LaTeX outputs."""
     from equilibrium.solvers.det_spec import DetSpec
+    from equilibrium.utils.io import read_regime_steady_values, read_steady_values
 
     settings = get_settings()
     old_save_dir = settings.paths.save_dir
@@ -519,6 +520,36 @@ def test_solve_sequence_save_regime_steady_outputs(tmp_path):
             assert steady_json.exists()
             assert steady_tex.exists()
             assert params_tex.exists()
+
+        def _assert_same_values(
+            left: dict[str, float], right: dict[str, float]
+        ) -> None:
+            assert left.keys() == right.keys()
+            for k in left.keys():
+                assert np.allclose(left[k], right[k], equal_nan=True)
+
+        # Read by deterministic regime coordinates (preferred API)
+        r0 = read_regime_steady_values(
+            model_label="det_model",
+            experiment_label="tax_shift",
+            regime_idx=0,
+            save_dir=settings.paths.save_dir,
+        )
+        _assert_same_values(
+            r0, read_steady_values(expected_labels[0], save_dir=settings.paths.save_dir)
+        )
+
+        # Also works with explicit regime_name disambiguation
+        r1 = read_regime_steady_values(
+            model_label="det_model",
+            experiment_label="tax_shift",
+            regime_idx=1,
+            regime_name="higher_beta",
+            save_dir=settings.paths.save_dir,
+        )
+        _assert_same_values(
+            r1, read_steady_values(expected_labels[1], save_dir=settings.paths.save_dir)
+        )
     finally:
         settings.paths.save_dir = old_save_dir
         settings.paths.plot_dir = old_plot_dir
