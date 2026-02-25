@@ -13,7 +13,8 @@ from typing import Optional, Sequence, Union
 
 import numpy as np
 
-from .deterministic import _build_regime_steady_label, _save_regime_steady_outputs
+from ..utils.io import build_regime_steady_label
+from .deterministic import _save_regime_steady_outputs
 
 logger = logging.getLogger(__name__)
 
@@ -196,7 +197,7 @@ def solve_sequence_linear(
 
         if should_save_regime_steady:
             regime_name = regime_labels[regime] if regime_labels is not None else None
-            regime_steady_label = _build_regime_steady_label(
+            regime_steady_label = build_regime_steady_label(
                 model_label=model_label,
                 experiment_label=experiment_label,
                 regime_idx=regime,

@@ -27,25 +27,6 @@ ALGORITHM_SPARSE = "sparse"
 VALID_ALGORITHMS = (ALGORITHM_LBJ, ALGORITHM_SPARSE)
 
 
-def _build_regime_steady_label(
-    model_label: str,
-    experiment_label: str,
-    regime_idx: int,
-    regime_name: Optional[str] = None,
-) -> str:
-    """
-    Backwards-compatible alias for regime steady-state label construction.
-
-    Prefer `equilibrium.utils.io.build_regime_steady_label` in new code.
-    """
-    return build_regime_steady_label(
-        model_label=model_label,
-        experiment_label=experiment_label,
-        regime_idx=regime_idx,
-        regime_name=regime_name,
-    )
-
-
 def _save_regime_steady_outputs(mod, label: str, save_tex: bool = False) -> None:
     """
     Save steady-state JSON and optional LaTeX exports for a regime label.
