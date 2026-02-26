@@ -619,7 +619,7 @@ def plot_paths(
 
         page_items = [*group_legend_items, *aux_legend_items]
         page_handles = [h for h, _ in page_items]
-        page_labels = [l for _, l in page_items]
+        page_labels = [label for _, label in page_items]
 
         if add_legend or page_labels:
             # choose a visible axis to anchor the legend bbox if outside
