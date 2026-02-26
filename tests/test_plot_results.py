@@ -179,6 +179,180 @@ def test_plot_spec_smoke(tmp_path):
         assert path.exists()
 
 
+def test_plot_deterministic_results_panel_lines_passthrough(tmp_path):
+    """Ensure panel line kwargs pass through to plot_paths and render."""
+    ux = np.column_stack(
+        [
+            np.log([1.0, 1.05, 1.1, 1.15, 1.2]),
+            [0.0, 0.1, 0.2, 0.3, 0.4],
+        ]
+    )
+    det_result = DeterministicResult(
+        UX=ux,
+        Z=np.zeros((5, 1)),
+        var_names=["log_A", "B"],
+        exog_names=["Z_til"],
+        model_label="panel_lines_model",
+    )
+
+    paths = plot_deterministic_results(
+        [det_result],
+        include_list=["log_A", "B"],
+        plot_dir=tmp_path,
+        result_names=["Baseline"],
+        panel_hlines={
+            "B": [
+                (0.0, {}),
+                (0.25, {"color": "red", "linestyle": "--"}),
+            ],
+        },
+        panel_vlines={
+            "log_A": (2, {"color": "gray", "alpha": 0.7}),
+        },
+        panel_hline_kwargs={"linewidth": 1.0},
+        panel_vline_kwargs={"linestyle": ":"},
+    )
+
+    assert paths
+    for path in paths:
+        assert path.exists()
+
+
+def test_plot_deterministic_results_panel_lines_unknown_panel_raises(tmp_path):
+    """Unknown panel keys in line specs should raise a clear ValueError."""
+    det_result = DeterministicResult(
+        UX=np.column_stack([[0.0, 0.1, 0.2]]),
+        Z=np.zeros((3, 1)),
+        var_names=["B"],
+        exog_names=["Z_til"],
+        model_label="panel_lines_invalid",
+    )
+
+    with pytest.raises(ValueError, match="not in include_list"):
+        plot_deterministic_results(
+            [det_result],
+            include_list=["B"],
+            plot_dir=tmp_path,
+            panel_hlines={"missing_panel": (0.0, {})},
+        )
+
+
+def test_plot_deterministic_results_panel_lines_invalid_shape_raises(tmp_path):
+    """Old scalar/dict panel-line specs should be rejected by strict API."""
+    det_result = DeterministicResult(
+        UX=np.column_stack([[0.0, 0.1, 0.2]]),
+        Z=np.zeros((3, 1)),
+        var_names=["B"],
+        exog_names=["Z_til"],
+        model_label="panel_lines_invalid_coord",
+    )
+
+    with pytest.raises(TypeError, match="must be a \\(value, specs\\) tuple"):
+        plot_deterministic_results(
+            [det_result],
+            include_list=["B"],
+            plot_dir=tmp_path,
+            panel_hlines={"B": 0.0},
+        )
+
+    with pytest.raises(TypeError, match="must be a \\(value, specs\\) tuple"):
+        plot_deterministic_results(
+            [det_result],
+            include_list=["B"],
+            plot_dir=tmp_path,
+            panel_hlines={"B": {"color": "red"}},
+        )
+
+
+def test_panel_line_label_appears_in_page_legend(tmp_path, monkeypatch):
+    """Legend should include panel-line labels from non-host axes."""
+    from matplotlib.axes import Axes
+
+    ux = np.column_stack(
+        [
+            np.log([1.0, 1.05, 1.1, 1.15, 1.2]),
+            [0.0, 0.1, 0.2, 0.3, 0.4],
+        ]
+    )
+    det_result = DeterministicResult(
+        UX=ux,
+        Z=np.zeros((5, 1)),
+        var_names=["log_A", "B"],
+        exog_names=["Z_til"],
+        model_label="panel_lines_legend_model",
+    )
+
+    captured_labels = []
+    original_legend = Axes.legend
+
+    def _legend_spy(self, *args, **kwargs):
+        if len(args) >= 2:
+            labels = list(args[1])
+        else:
+            _, labels = self.get_legend_handles_labels()
+        captured_labels.append(labels)
+        return original_legend(self, *args, **kwargs)
+
+    monkeypatch.setattr(Axes, "legend", _legend_spy)
+
+    plot_deterministic_results(
+        [det_result],
+        include_list=["log_A", "B"],
+        plot_dir=tmp_path,
+        result_names=["Baseline"],
+        panel_vlines={
+            "log_A": [(2, {"label": "Threshold", "color": "black", "linestyle": "--"})]
+        },
+    )
+
+    assert captured_labels
+    assert any("Threshold" in labels for labels in captured_labels)
+
+
+def test_panel_line_labels_ordered_after_group_labels(tmp_path, monkeypatch):
+    """Page legend should list group labels before panel-line labels."""
+    from matplotlib.axes import Axes
+
+    ux = np.column_stack(
+        [
+            np.log([1.0, 1.05, 1.1, 1.15, 1.2]),
+            [0.0, 0.1, 0.2, 0.3, 0.4],
+        ]
+    )
+    det_result = DeterministicResult(
+        UX=ux,
+        Z=np.zeros((5, 1)),
+        var_names=["log_A", "B"],
+        exog_names=["Z_til"],
+        model_label="panel_lines_order_model",
+    )
+
+    captured_labels = []
+    original_legend = Axes.legend
+
+    def _legend_spy(self, *args, **kwargs):
+        if len(args) >= 2:
+            labels = list(args[1])
+            captured_labels.append(labels)
+        return original_legend(self, *args, **kwargs)
+
+    monkeypatch.setattr(Axes, "legend", _legend_spy)
+
+    plot_deterministic_results(
+        [det_result],
+        include_list=["log_A", "B"],
+        plot_dir=tmp_path,
+        result_names=["Baseline"],
+        panel_hlines={"B": [(0.25, {"label": "Target", "color": "black"})]},
+    )
+
+    assert captured_labels
+    labels = captured_labels[-1]
+    assert "Baseline" in labels
+    assert "Target" in labels
+    assert labels.index("Baseline") < labels.index("Target")
+
+
 class TestSequenceResultSplice:
     """Tests for SequenceResult.splice method."""
 

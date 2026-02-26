@@ -99,6 +99,69 @@ class PlotSpec:
         return kwargs
 
 
+def _normalize_panel_line_specs(
+    panel_lines: Optional[Mapping[str, Any]],
+    *,
+    coord_key: str,
+    include_list: Sequence[str],
+) -> Dict[str, List[Dict[str, Any]]]:
+    """Normalize per-panel line specs for ``axhline``/``axvline`` drawing."""
+    if panel_lines is None:
+        return {}
+    if not isinstance(panel_lines, Mapping):
+        raise TypeError(
+            "panel line specs must be a mapping from panel name to spec(s)."
+        )
+
+    include_set = set(include_list)
+    normalized: Dict[str, List[Dict[str, Any]]] = {}
+
+    for panel_name, raw_specs in panel_lines.items():
+        if panel_name not in include_set:
+            raise ValueError(
+                f"Panel line spec key '{panel_name}' is not in include_list."
+            )
+
+        # Strict API:
+        #   {var: (value, specs)}
+        #   {var: [(value1, specs1), (value2, specs2), ...]}
+        is_single_pair = (
+            isinstance(raw_specs, tuple)
+            and len(raw_specs) == 2
+            and isinstance(raw_specs[1], Mapping)
+        )
+        if is_single_pair:
+            spec_items = [raw_specs]
+        elif isinstance(raw_specs, Sequence) and not isinstance(
+            raw_specs, (str, bytes, tuple)
+        ):
+            spec_items = list(raw_specs)
+        else:
+            raise TypeError(
+                "Panel line specs for "
+                f"'{panel_name}' must be a (value, specs) tuple or a sequence of such tuples."
+            )
+
+        panel_specs: List[Dict[str, Any]] = []
+        for spec in spec_items:
+            if not (
+                isinstance(spec, tuple)
+                and len(spec) == 2
+                and isinstance(spec[1], Mapping)
+            ):
+                raise TypeError(
+                    "Each panel line spec for "
+                    f"'{panel_name}' must be a (value, specs) tuple."
+                )
+            value, specs = spec
+            line_spec = {coord_key: value, **dict(specs)}
+            panel_specs.append(line_spec)
+
+        normalized[panel_name] = panel_specs
+
+    return normalized
+
+
 def plot_paths(
     path_vals: np.ndarray,
     full_list: Sequence[str],
@@ -140,6 +203,10 @@ def plot_paths(
     legend_loc: str = "best",
     zero_line: bool = False,
     zero_line_kwargs: Optional[Dict] = None,
+    panel_hlines: Optional[Mapping[str, Any]] = None,
+    panel_vlines: Optional[Mapping[str, Any]] = None,
+    panel_hline_kwargs: Optional[Dict[str, Any]] = None,
+    panel_vline_kwargs: Optional[Dict[str, Any]] = None,
     band_groups: Optional[Dict[str, Sequence[str]]] = None,
     band_colors: Optional[Dict[str, str]] = None,
     band_alphas: Optional[Dict[str, float]] = None,
@@ -196,6 +263,15 @@ def plot_paths(
         be supplied.
     zero_line : bool, default False
         Whether to overlay a horizontal reference line at zero.
+    panel_hlines, panel_vlines : Mapping[str, ...], optional
+        Per-panel horizontal/vertical reference lines keyed by variable name.
+        Each value must be either a single ``(value, specs)`` tuple or a
+        sequence of such tuples, where ``specs`` is a dict of matplotlib line
+        kwargs. For horizontal lines, ``value`` is the y-coordinate; for
+        vertical lines, ``value`` is the x-coordinate.
+    panel_hline_kwargs, panel_vline_kwargs : dict, optional
+        Default matplotlib kwargs merged into each panel line spec. Per-line
+        dict spec values take precedence.
     clear_previous : bool, default True
         Remove previously generated ``prefix``-matching files before saving new
         pages.
@@ -236,9 +312,18 @@ def plot_paths(
         "linewidth": 1,
         "linestyle": ":",
     } | (zero_line_kwargs or {})
+    panel_hline_kwargs = panel_hline_kwargs or {}
+    panel_vline_kwargs = panel_vline_kwargs or {}
     band_groups = band_groups or {}
     band_colors = band_colors or {}
     band_alphas = band_alphas or {}
+
+    panel_hlines_norm = _normalize_panel_line_specs(
+        panel_hlines, coord_key="y", include_list=include_list
+    )
+    panel_vlines_norm = _normalize_panel_line_specs(
+        panel_vlines, coord_key="x", include_list=include_list
+    )
 
     # shape: ensure (G, T, V)
     arr = np.asarray(path_vals)
@@ -405,6 +490,22 @@ def plot_paths(
             if zero_line:
                 ax.plot(grid, np.zeros_like(grid, dtype=float), **zero_line_kwargs)
 
+            for line_spec in panel_hlines_norm.get(vname, []):
+                y = line_spec["y"]
+                hline_kwargs = {**panel_hline_kwargs, **dict(line_spec)}
+                hline_kwargs.pop("y", None)
+                if "zorder" not in hline_kwargs:
+                    hline_kwargs["zorder"] = 0
+                ax.axhline(y=y, **hline_kwargs)
+
+            for line_spec in panel_vlines_norm.get(vname, []):
+                x = line_spec["x"]
+                vline_kwargs = {**panel_vline_kwargs, **dict(line_spec)}
+                vline_kwargs.pop("x", None)
+                if "zorder" not in vline_kwargs:
+                    vline_kwargs["zorder"] = 0
+                ax.axvline(x=x, **vline_kwargs)
+
             # draw lines per (base) group
             if base_group_names is not None:
                 for count_group, g in enumerate(base_group_names):
@@ -494,15 +595,50 @@ def plot_paths(
         for j in range(n_this_page, len(axes)):
             fig.delaxes(axes[j])
 
-        # legend (once per page)
-        if add_legend:
+        # legend (once per page): collect labeled artists from all visible panels
+        # and order group entries before panel reference-line entries.
+        group_label_set = set()
+        if base_group_names is not None and group_titles is not None and legend_include:
+            for g in legend_include:
+                if g in group_titles:
+                    group_label_set.add(group_titles[g])
+
+        group_legend_items = []
+        aux_legend_items = []
+        seen_labels = set()
+        for ax in axes[:n_this_page]:
+            handles, labels = ax.get_legend_handles_labels()
+            for handle, label in zip(handles, labels):
+                if not label or label.startswith("_") or label in seen_labels:
+                    continue
+                seen_labels.add(label)
+                if label in group_label_set:
+                    group_legend_items.append((handle, label))
+                else:
+                    aux_legend_items.append((handle, label))
+
+        page_items = [*group_legend_items, *aux_legend_items]
+        page_handles = [h for h, _ in page_items]
+        page_labels = [l for _, l in page_items]
+
+        if add_legend or page_labels:
             # choose a visible axis to anchor the legend bbox if outside
             host_ax = axes[min(n_this_page - 1, len(axes) - 1)]
             if leg_outside:
-                lgd = host_ax.legend(fontsize=smallfont - 2, bbox_to_anchor=(1.5, 1.1))
+                lgd = host_ax.legend(
+                    page_handles,
+                    page_labels,
+                    fontsize=smallfont - 2,
+                    bbox_to_anchor=(1.5, 1.1),
+                )
                 save_kwargs = {"bbox_extra_artists": (lgd,), "bbox_inches": "tight"}
             else:
-                host_ax.legend(fontsize=smallfont - 2, loc=legend_loc)
+                host_ax.legend(
+                    page_handles,
+                    page_labels,
+                    fontsize=smallfont - 2,
+                    loc=legend_loc,
+                )
                 save_kwargs = {}
         else:
             save_kwargs = {}
