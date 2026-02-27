@@ -58,6 +58,11 @@ class JaxConfig(BaseModel):
     Configuration for JAX runtime behavior.
 
     Attributes:
+        platform: JAX compute platform to use. "cpu" (default) forces CPU-only
+            execution, which is appropriate for economic models whose workloads
+            are too small to benefit from GPU parallelism and avoids GPU memory
+            preallocation errors. Set to "gpu" or "tpu" to use accelerators, or
+            None to let JAX auto-detect available hardware.
         compilation_cache_enabled: Whether to enable persistent compilation caching.
             When enabled, JAX saves compiled functions to disk, dramatically speeding
             up subsequent runs ("warm runs") by avoiding recompilation.
@@ -70,6 +75,7 @@ class JaxConfig(BaseModel):
             economic modeling). Default True.
     """
 
+    platform: Optional[str] = "cpu"
     compilation_cache_enabled: bool = True
     compilation_cache_dir: Optional[Path] = None
     min_compile_time_secs: float = 0.0
@@ -198,10 +204,16 @@ def _configure_jax(settings: Settings) -> None:
     Configure JAX runtime settings based on the Settings object.
 
     This function should be called once during initialization to set up:
+    - Compute platform (CPU by default; override with EQUILIBRIUM_JAX__PLATFORM=gpu)
     - Persistent compilation caching (dramatically speeds up subsequent runs)
     - 64-bit precision (required for economic modeling)
     """
     import jax
+
+    # Set compute platform before any other JAX config so the backend is
+    # initialised on the correct device.  None means let JAX auto-detect.
+    if settings.jax.platform is not None:
+        jax.config.update("jax_platforms", settings.jax.platform)
 
     # Enable 64-bit precision
     if settings.jax.enable_x64:

@@ -1,8 +1,8 @@
-# Copilot Instructions for Danare
+# Copilot Instructions for Equilibrium
 
 ## Project Overview
 
-Danare is a dynamic general-equilibrium solver built on JAX, designed for solving and analyzing economic models. The project emphasizes high-performance numerical computing with automatic differentiation and JIT compilation.
+Equilibrium is a dynamic general-equilibrium solver built on JAX, designed for solving and analyzing economic models. The project emphasizes high-performance numerical computing with automatic differentiation and JIT compilation.
 
 ## General Best Practices
 
@@ -33,7 +33,7 @@ Danare is a dynamic general-equilibrium solver built on JAX, designed for solvin
 ### Package Organization
 ```
 src/
-└── danare/
+└── equilibrium/
     ├── __init__.py           # Public API exports (Model, LinearModel, plot functions, I/O)
     ├── core/                  # Core functionality
     │   ├── codegen.py        # Code generation from symbolic rules
@@ -106,7 +106,7 @@ new_state = state._replace(var1=new_value)
 The `FunctionBundle` class caches JIT-compiled functions and their derivatives:
 
 ```python
-from danare.utils.jax_function_bundle import FunctionBundle
+from equilibrium.utils.jax_function_bundle import FunctionBundle
 
 # Create a bundle with cached derivatives
 bundle = FunctionBundle(
@@ -127,11 +127,11 @@ jacobian_y = bundle.jacobian_rev_jit[1](x, y, config)
 Danare uses Pydantic for centralized configuration:
 
 ```python
-from danare.settings import get_settings
+from equilibrium.settings import get_settings
 
 settings = get_settings()
 # Access paths
-settings.paths.data_dir    # ~/.local/share/DANARE/
+settings.paths.data_dir    # ~/.local/share/EQUILIBRIUM/
 settings.paths.save_dir    # data_dir/cache
 settings.paths.log_dir     # data_dir/logs
 settings.paths.debug_dir   # data_dir/debug
@@ -139,16 +139,16 @@ settings.paths.plot_dir    # data_dir/plots
 ```
 
 **Environment Variable Overrides:**
-- `DANARE_PATHS__DATA_DIR` - Override data directory
-- `DANARE_LOGGING__ENABLED=true` - Enable logging
-- `DANARE_LOGGING__LEVEL=DEBUG` - Set log level
+- `EQUILIBRIUM_PATHS__DATA_DIR` - Override data directory
+- `EQUILIBRIUM_LOGGING__ENABLED=true` - Enable logging
+- `EQUILIBRIUM_LOGGING__LEVEL=DEBUG` - Set log level
 
 #### Logging Configuration
 ```python
-from danare.logger import get_logger, configure_logging
+from equilibrium.logger import get_logger, configure_logging
 
 # Get a logger
-logger = get_logger("mymodule")  # Returns danare.mymodule logger
+logger = get_logger("mymodule")  # Returns equilibrium.mymodule logger
 
 # Manual configuration
 configure_logging()  # Uses settings from get_settings()
@@ -176,7 +176,7 @@ configure_logging()  # Uses settings from get_settings()
 Use `DeterministicResult` and `SequenceResult` for storing solver outputs:
 
 ```python
-from danare.solvers.results import DeterministicResult, SequenceResult
+from equilibrium.solvers.results import DeterministicResult, SequenceResult
 
 # DeterministicResult stores a single path
 result = DeterministicResult(
@@ -198,7 +198,7 @@ spliced = seq_result.splice(T_max=50)  # Combine into single DeterministicResult
 
 #### I/O Utilities
 ```python
-from danare.io import resolve_output_path, save_results, load_results
+from equilibrium.io import resolve_output_path, save_results, load_results
 
 # Resolve path with smart defaults
 path = resolve_output_path(
@@ -218,7 +218,7 @@ data = load_results(path)
 
 #### Plotting Utilities
 ```python
-from danare.plot import plot_paths, plot_deterministic_results
+from equilibrium.plot import plot_paths, plot_deterministic_results
 
 # Plot time-series paths
 plot_paths(
@@ -245,7 +245,7 @@ plot_deterministic_results(
 
 #### DetSpec for Multi-Regime Simulations
 ```python
-from danare.solvers.det_spec import DetSpec
+from equilibrium.solvers.det_spec import DetSpec
 
 # Create a scenario with parameter regimes and shocks
 spec = DetSpec()
@@ -316,7 +316,7 @@ Use conda to create an isolated environment with all dependencies:
 ```bash
 # Create and activate the conda environment
 conda env create -f environment.yml
-conda activate danare-env
+conda activate equilibrium-env
 ```
 The environment.yml file is cross-platform and will work on Linux, macOS, and Windows.
 
@@ -324,8 +324,8 @@ The environment.yml file is cross-platform and will work on Linux, macOS, and Wi
 Combine conda for base packages and pip for the package installation:
 ```bash
 # Create a minimal conda environment
-conda create -n danare-env python=3.10
-conda activate danare-env
+conda create -n equilibrium-env python=3.10
+conda activate equilibrium-env
 
 # Install dependencies via pip
 pip install -r requirements-dev.txt
@@ -359,7 +359,7 @@ ruff check .
 black .
 
 # Type check (when configured)
-mypy danare
+mypy equilibrium
 ```
 
 ### Import Management
