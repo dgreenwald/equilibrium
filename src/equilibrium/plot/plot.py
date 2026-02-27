@@ -1049,6 +1049,7 @@ def plot_model_irfs(
     prefix: Optional[str] = None,
     plot_type: str = "pdf",
     title_str: Optional[str] = None,
+    show_title: bool = True,
     x_str: str = "Period",
     n_periods: Optional[int] = None,
     shock_size: Union[float, dict[str, float]] = 1.0,
@@ -1097,7 +1098,11 @@ def plot_model_irfs(
         File extension for saved plots (e.g., "png", "pdf").
     title_str : str, optional
         Title string to display on plots. If None, defaults to
-        "Impulse Response to {shock}" for each shock.
+        "Impulse Response to {shock}" for each shock. Supports ``{shock}``
+        placeholder for substitution with the shock label.
+    show_title : bool, default True
+        If False, suppresses the plot title entirely regardless of
+        ``title_str``.
     x_str : str, default "Period"
         Label for the x-axis.
     n_periods : int, optional
@@ -1298,6 +1303,7 @@ def plot_model_irfs(
         prefix=prefix,
         plot_type=plot_type,
         title_str=title_str,
+        show_title=show_title,
         x_str=x_str,
         n_periods=n_periods,
         shock_size=shock_size_for_results,
@@ -1319,6 +1325,7 @@ def plot_irf_results(
     prefix: Optional[str] = None,
     plot_type: str = "pdf",
     title_str: Optional[str] = None,
+    show_title: bool = True,
     x_str: str = "Period",
     n_periods: Optional[int] = None,
     shock_size: Union[float, dict[str, float]] = 1.0,
@@ -1362,7 +1369,11 @@ def plot_irf_results(
         File extension for saved plots (e.g., "png", "pdf").
     title_str : str, optional
         Title string template to display on plots. If None, defaults to
-        "Impulse Response to {shock}".
+        "Impulse Response to {shock}". Supports ``{shock}`` placeholder for
+        substitution with the shock label.
+    show_title : bool, default True
+        If False, suppresses the plot title entirely regardless of
+        ``title_str``.
     x_str : str, default "Period"
         Label for the x-axis.
     n_periods : int, optional
@@ -1516,6 +1527,8 @@ def plot_irf_results(
             if title_str and "{shock}" in title_str
             else (title_str if title_str else f"Impulse Response to {shock_label}")
         )
+        if not show_title:
+            shock_title = None
 
         # Set default prefix for this shock
         shock_prefix = prefix if prefix else f"irf_to_{shock_name}"
