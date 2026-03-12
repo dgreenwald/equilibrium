@@ -572,6 +572,8 @@ def calibrate(
     progress_every: int = 1,
     label: Optional[str] = None,
     save_dir: Optional[Union[Path, str]] = None,
+    initialize_from_saved: bool = False,
+    load_label: Optional[str] = None,
     **solver_kwargs,
 ) -> CalibrationResult:
     """
@@ -632,6 +634,14 @@ def calibrate(
         - On failure: raises RuntimeError.
     save_dir : Path | str, optional
         Directory to save results to when label is provided.
+    initialize_from_saved : bool, default False
+        If True, load previously saved calibrated parameters and use them as
+        initial guesses, overriding the ``initial`` values in ``calib_params``.
+        Parameters missing from the saved file retain their original initial
+        values. Requires either ``load_label`` or ``label`` to be set.
+    load_label : str, optional
+        Label to load saved parameters from when ``initialize_from_saved=True``.
+        Falls back to ``label`` if not provided.
     **solver_kwargs
         Additional keyword arguments passed to the solver.
 
@@ -708,6 +718,36 @@ def calibrate(
     param_to_model, initial_params, auto_bounds, param_names = _build_param_to_model(
         model, calib_params, spec, suppress_solver_output, calibrate_initial
     )
+
+    # Warm start: override initial values from a previously saved calibration
+    if initialize_from_saved:
+        _effective_load_label = load_label or label
+        if _effective_load_label is None:
+            raise ValueError(
+                "initialize_from_saved=True requires either 'label' or 'load_label' "
+                "to be set so that saved parameters can be located."
+            )
+        from ..utils.io import read_calibrated_params
+
+        try:
+            saved_params = read_calibrated_params(
+                _effective_load_label, save_dir=save_dir
+            )
+            for i, name in enumerate(param_names):
+                if name in saved_params:
+                    initial_params[i] = saved_params[name]
+            logger.info(
+                "Warm start: loaded %d/%d parameters from '%s'.",
+                sum(n in saved_params for n in param_names),
+                len(param_names),
+                _effective_load_label,
+            )
+        except FileNotFoundError:
+            logger.warning(
+                "initialize_from_saved=True but no saved file found for label '%s'. "
+                "Proceeding with original initial values.",
+                _effective_load_label,
+            )
 
     # Use auto-bounds from calib_params if user didn't pass explicit bounds
     if bounds is None:
