@@ -1910,7 +1910,7 @@ class Model:
         # Export variables to {label}_steady.tex
         if vars_dict:
             vars_path = tex_dir / f"{self.label}_steady.tex"
-            io._write_latex_property_list(
+            io.write_latex_property_list(
                 data=vars_dict,
                 path=vars_path,
                 prop_name="g_equilibrium_steady_prop",
@@ -1922,7 +1922,7 @@ class Model:
         # Export parameters to {label}_params.tex
         if params_dict:
             params_path = tex_dir / f"{self.label}_params.tex"
-            io._write_latex_property_list(
+            io.write_latex_property_list(
                 data=params_dict,
                 path=params_path,
                 prop_name="g_equilibrium_param_prop",

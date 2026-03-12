@@ -52,6 +52,7 @@ from .utils.io import (  # noqa: E402
     save_calibrated_params,
     save_calibrated_params_to_latex,
     save_steady_values_to_latex,
+    write_latex_property_list,
 )
 
 try:  # when installed (pip install equilibrium or -e .)
@@ -80,6 +81,7 @@ __all__: list[str] = [
     "save_calibrated_params",
     "save_steady_values_to_latex",
     "save_calibrated_params_to_latex",
+    "write_latex_property_list",
     "load_model_irfs",
     "load_deterministic_result",
     "load_sequence_result",

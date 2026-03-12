@@ -973,7 +973,7 @@ def _to_camel_case(s: str) -> str:
     return parts[0] + "".join(word.capitalize() for word in parts[1:])
 
 
-def _write_latex_property_list(
+def write_latex_property_list(
     data: dict[str, float],
     path: Path,
     prop_name: str,
@@ -1131,7 +1131,7 @@ def save_steady_values_to_latex(
         key_prefix = None
 
     # Write the LaTeX file
-    _write_latex_property_list(
+    write_latex_property_list(
         data=steady_values,
         path=output_path,
         prop_name=prop_name,
@@ -1262,7 +1262,7 @@ def save_calibrated_params_to_latex(
         key_prefix = None
 
     # Write the LaTeX file
-    _write_latex_property_list(
+    write_latex_property_list(
         data=calibrated_params,
         path=output_path,
         prop_name=prop_name,
