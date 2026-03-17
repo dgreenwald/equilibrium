@@ -88,14 +88,20 @@ def debt_block(
     block,
     *,
     tv_prepayment: bool = False,
+    detrend: bool = False,
 ) -> ModelBlock:
     """Debt pricing"""
 
     if tv_prepayment:
         raise Exception
 
+    detrender = " / G" if detrend else ""
+
     block.rules["intermediate"] += [
-        ("Om_denom_INSTRUMENT_AGENT", "1.0 - bet_pi_AGENT * frac_INSTRUMENT_remaining"),
+        (
+            "Om_denom_INSTRUMENT_AGENT",
+            f"1.0 - bet_pi_AGENT{detrender} * frac_INSTRUMENT_remaining",
+        ),
     ]
 
     block.rules["optimality"] += [
@@ -112,12 +118,12 @@ def debt_block(
     block.rules["expectations"] += [
         (
             "E_Om_principal_INSTRUMENT_AGENT",
-            "Lam_1_nom_AGENT_NEXT * (marg_principal_flow_INSTRUMENT_AGENT_NEXT "
+            f"Lam_1_nom_AGENT_NEXT{detrender} * (marg_principal_flow_INSTRUMENT_AGENT_NEXT "
             "+ frac_INSTRUMENT_remaining * Om_principal_INSTRUMENT_AGENT_NEXT)",
         ),
         (
             "E_Om_spread_INSTRUMENT_AGENT",
-            "Lam_1_nom_AGENT_NEXT * (marg_spread_flow_INSTRUMENT_AGENT_NEXT "
+            f"Lam_1_nom_AGENT_NEXT{detrender} * (marg_spread_flow_INSTRUMENT_AGENT_NEXT "
             "+ frac_INSTRUMENT_remaining * Om_spread_INSTRUMENT_AGENT_NEXT)",
         ),
     ]
@@ -125,10 +131,10 @@ def debt_block(
     block.rules["analytical_steady"] += [
         (
             "Om_principal_INSTRUMENT_AGENT",
-            "bet_pi_ATYPE * marg_principal_flow_INSTRUMENT_AGENT / Om_denom_INSTRUMENT_ATYPE",
+            f"bet_pi_ATYPE{detrender} * marg_principal_flow_INSTRUMENT_AGENT / Om_denom_INSTRUMENT_ATYPE",
         ),
         (
             "Om_spread_INSTRUMENT_AGENT",
-            "bet_pi_ATYPE * marg_spread_flow_INSTRUMENT_AGENT / Om_denom_INSTRUMENT_ATYPE",
+            f"bet_pi_ATYPE{detrender} * marg_spread_flow_INSTRUMENT_AGENT / Om_denom_INSTRUMENT_ATYPE",
         ),
     ]
