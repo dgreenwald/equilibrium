@@ -20,6 +20,8 @@ from .plot.plot import (  # noqa: E402
     plot_model_irfs,
     plot_paths,
 )
+from .modspec import ModSpec  # noqa: E402
+from .run_item import RunItem  # noqa: E402
 from .solvers.calibration import (  # noqa: E402
     CalibrationResult,
     FunctionalTarget,
@@ -91,6 +93,8 @@ __all__: list[str] = [
     "DeterministicResult",
     "SequenceResult",
     "SeriesTransform",
+    "ModSpec",
+    "RunItem",
     "DetSpec",
     "LinearSpec",
     "calibrate",
