@@ -14,13 +14,13 @@ _get_settings()
 from . import blocks  # noqa: E402
 from .io import load_results, resolve_output_path, save_results  # noqa: E402
 from .model import LinearModel, Model  # noqa: E402
+from .modspec import ModSpec  # noqa: E402
 from .plot.plot import (  # noqa: E402
     plot_deterministic_results,
     plot_irf_results,
     plot_model_irfs,
     plot_paths,
 )
-from .modspec import ModSpec  # noqa: E402
 from .run_item import RunItem  # noqa: E402
 from .solvers.calibration import (  # noqa: E402
     CalibrationResult,
@@ -43,6 +43,7 @@ from .solvers.results import (  # noqa: E402
 from .utils.io import (  # noqa: E402
     build_regime_steady_label,
     load_deterministic_result,
+    load_linear_sequence_result,
     load_model_irfs,
     load_sequence_result,
     read_calibrated_param,
@@ -86,6 +87,7 @@ __all__: list[str] = [
     "write_latex_property_list",
     "load_model_irfs",
     "load_deterministic_result",
+    "load_linear_sequence_result",
     "load_sequence_result",
     "blocks",
     "PathResult",

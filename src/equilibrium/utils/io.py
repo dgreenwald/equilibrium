@@ -967,6 +967,74 @@ def load_sequence_result(
     return result
 
 
+def load_linear_sequence_result(
+    model_label: str,
+    experiment_label: Optional[str] = None,
+    *,
+    save_dir: Optional[Path | str] = None,
+    splice: bool = False,
+    T_max: Optional[int] = None,
+) -> "SequenceResult | DeterministicResult":
+    """
+    Load a linear sequence result by model and experiment labels.
+
+    This function loads a SequenceResult that was saved after running
+    solve_sequence_linear() with a labeled DetSpec. Results are stored
+    under sequences_linear/ to avoid collisions with nonlinear deterministic
+    results stored under sequences/.
+
+    Parameters
+    ----------
+    model_label : str
+        Label of the model.
+    experiment_label : str, optional
+        Experiment/scenario label (from DetSpec.label). If None, loads
+        "{model_label}.npz". If provided, loads "{model_label}_{experiment_label}.npz".
+    save_dir : Path or str, optional
+        Directory to load from. Defaults to settings.paths.save_dir.
+    splice : bool, default False
+        If True, splice the loaded SequenceResult before returning.
+    T_max : int, optional
+        Total length for splicing. If None, SequenceResult uses its default.
+
+    Returns
+    -------
+    SequenceResult or DeterministicResult
+        The loaded sequence result, or a spliced DeterministicResult if
+        splice is True.
+
+    Raises
+    ------
+    FileNotFoundError
+        If the result file does not exist.
+    """
+    from ..io import resolve_output_path
+    from ..solvers.results import SequenceResult
+
+    filepath = resolve_output_path(
+        None,
+        result_type="sequences_linear",
+        model_label=model_label,
+        experiment_label=experiment_label,
+        save_dir=save_dir,
+        suffix=".npz",
+    )
+
+    if not filepath.exists():
+        label_str = (
+            f"{model_label}_{experiment_label}" if experiment_label else model_label
+        )
+        raise FileNotFoundError(
+            f"Linear sequence result file not found: {filepath}. "
+            f"Have you saved the result for '{label_str}'?"
+        )
+
+    result = SequenceResult.load(filepath)
+    if splice:
+        return result.splice(T_max=T_max)
+    return result
+
+
 def _to_camel_case(s: str) -> str:
     """Convert underscore_case to camelCase."""
     parts = s.split("_")

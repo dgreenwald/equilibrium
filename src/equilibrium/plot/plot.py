@@ -790,7 +790,8 @@ def plot_deterministic_results(
         List of (model_label, experiment_label) pairs to load and plot. Loaded
         results are appended after any explicit ``results``.
     result_kind : str, default "sequence"
-        Type of labeled results to load: "sequence" or "deterministic".
+        Type of labeled results to load: "sequence", "linear_sequence", or
+        "deterministic".
     save_dir : str or Path, optional
         Base directory used to load labeled results. Defaults to settings.
     include_list : Sequence[str], optional

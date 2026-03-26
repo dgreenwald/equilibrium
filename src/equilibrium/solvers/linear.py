@@ -31,6 +31,7 @@ def solve_sequence_linear(
     save_path: Optional[Union[str, Path]] = None,
     save_format: str = "npz",
     display_steady: bool = False,
+    save_results: bool = True,
     copy_model: bool = False,
     save_regime_steady: bool = False,
     save_regime_steady_tex: bool = False,
@@ -83,9 +84,13 @@ def solve_sequence_linear(
         re-solving for calibrated parameters that may be preset in the regime.
         Default is False.
     save_path : str or Path, optional
-        If provided, save results to this path.
+        If provided and ``save_results`` is True, save results to this path.
     save_format : str, default "npz"
         Format for saving results. Supported: 'npz', 'json'.
+    save_results : bool, default True
+        If True, save the resulting SequenceResult. When True and ``save_path``
+        is None, uses the default path under sequences_linear/ where
+        load_linear_sequence_result expects results.
     display_steady : bool, optional
         Whether to display steady state results when solving for each regime.
         Default is False to reduce output when solving multiple regimes.
@@ -313,8 +318,13 @@ def solve_sequence_linear(
         regime_steady_labels=regime_steady_labels,
     )
 
-    if save_path is not None:
-        sequence_result.save(save_path, format=save_format, overwrite=True)
+    if save_results:
+        if save_path is None:
+            sequence_result.save(
+                result_type="sequences_linear", format=save_format, overwrite=True
+            )
+        else:
+            sequence_result.save(save_path, format=save_format, overwrite=True)
 
     return sequence_result
 

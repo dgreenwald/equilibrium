@@ -298,7 +298,8 @@ def prepare_deterministic_paths(
         List of (model_label, experiment_label) pairs to load and prepare. Loaded
         results are appended after any explicit ``results``.
     result_kind : str, default "sequence"
-        Type of labeled results to load: "sequence" or "deterministic".
+        Type of labeled results to load: "sequence", "linear_sequence", or
+        "deterministic".
     save_dir : str or Path, optional
         Base directory used to load labeled results. Defaults to settings.
     result_names : Sequence[str], optional
@@ -367,7 +368,11 @@ def prepare_deterministic_paths(
     """
     # Import here to avoid circular imports
     from ..solvers.results import DeterministicResult, SequenceResult
-    from ..utils.io import load_deterministic_result, load_sequence_result
+    from ..utils.io import (
+        load_deterministic_result,
+        load_linear_sequence_result,
+        load_sequence_result,
+    )
 
     results_list: List[DeterministicResult] = []
     auto_names: List[str] = []
@@ -397,14 +402,22 @@ def prepare_deterministic_paths(
                     splice=True,
                     T_max=T_max,
                 )
+            elif result_kind == "linear_sequence":
+                loaded = load_linear_sequence_result(
+                    model_label,
+                    experiment_label,
+                    save_dir=save_dir,
+                    splice=True,
+                    T_max=T_max,
+                )
             elif result_kind == "deterministic":
                 loaded = load_deterministic_result(
                     model_label, experiment_label, save_dir=save_dir
                 )
             else:
                 raise ValueError(
-                    "result_kind must be 'sequence' or 'deterministic', "
-                    f"got '{result_kind}'."
+                    "result_kind must be 'sequence', 'linear_sequence', or "
+                    f"'deterministic', got '{result_kind}'."
                 )
             results_list.append(loaded)
             label_str = (

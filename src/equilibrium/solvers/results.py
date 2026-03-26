@@ -894,6 +894,7 @@ class SequenceResult:
         format: str = "npz",
         overwrite: bool = False,
         timestamp: bool = False,
+        result_type: str = "sequences",
     ) -> Path:
         """
         Save the sequence result to a file.
@@ -909,6 +910,9 @@ class SequenceResult:
             If False and file exists, raise FileExistsError.
         timestamp : bool, default False
             If True and filepath is None, append timestamp to filename.
+        result_type : str, default "sequences"
+            Subdirectory under save_dir to use. Override to "sequences_linear"
+            when saving linear solver results.
 
         Returns
         -------
@@ -917,7 +921,7 @@ class SequenceResult:
         """
         path = resolve_output_path(
             filepath,
-            result_type="sequences",
+            result_type=result_type,
             model_label=self.model_label,
             experiment_label=self.experiment_label,
             timestamp=timestamp,
