@@ -431,9 +431,9 @@ def test_solve_sequence_two_regimes():
         assert result.regimes[i].Z.shape == (Nt, mod.N["z"])
 
     # The second regime should have initial conditions from the first
-    # at time index 4 (the transition time is time_list[0] - 1)
-    # Z[0] for regime 1 should equal Z[4] from regime 0
-    assert np.allclose(result.regimes[1].Z[0, :], result.regimes[0].Z[4, :])
+    # time_list[0]=5 means transition at time 5, with start_time=0,
+    # transition_time in path = 5, so Z[0] for regime 1 should equal Z[5] from regime 0
+    assert np.allclose(result.regimes[1].Z[0, :], result.regimes[0].Z[5, :])
 
 
 def test_solve_sequence_regime_parameter_change():
@@ -605,7 +605,7 @@ def test_solve_sequence_initial_conditions():
     # The second regime's initial UX should match the first regime's UX at time 10
     # This is ensured by the ux_init passed to solve
     # We verify by checking that the solution is continuous across regimes
-    transition_time = 9
+    transition_time = 10
     z_at_transition = result.regimes[0].Z[transition_time, :]
 
     # The Z path for the second regime should start from z_at_transition
@@ -1057,6 +1057,35 @@ def test_solve_sequence_linear_with_recalibration():
     N_ux = mod.N["u"] + mod.N["x"]
     assert result.regimes[0].UX.shape == (20, N_ux)
     assert result.regimes[1].UX.shape == (20, N_ux)
+
+
+def test_solve_sequence_exogenous_persistence_tight_timing():
+    """Test that exogenous state persists across regimes with time_list=[1,2,3]."""
+    from equilibrium.solvers.det_spec import DetSpec
+
+    mod = set_model()
+    mod.solve_steady(calibrate=True)
+    mod.linearize()
+
+    # 4 regimes, each contributing exactly one new period
+    spec = DetSpec(n_regimes=4, time_list=[1, 2, 3])
+    spec.add_shock(0, "Z_til", 0, 0.10)
+    spec.add_shock(1, "Z_til", 0, 0.05)
+    spec.add_shock(2, "Z_til", 0, 0.03)
+    spec.add_shock(3, "Z_til", 0, 0.01)
+
+    Nt = 20
+    result = deterministic.solve_sequence(spec, mod, Nt, save_results=False)
+
+    # Each regime's Z[0] must equal the previous regime's Z[1] (post-shock)
+    assert np.allclose(result.regimes[1].Z[0, :], result.regimes[0].Z[1, :])
+    assert np.allclose(result.regimes[2].Z[0, :], result.regimes[1].Z[1, :])
+    assert np.allclose(result.regimes[3].Z[0, :], result.regimes[2].Z[1, :])
+
+    # The handed-off z must NOT be zero (exogenous persistence preserved)
+    assert not np.allclose(result.regimes[1].Z[0, :], 0.0), (
+        "Regime 1 received a zero z_init — persistence was lost"
+    )
 
 
 def _run_all_with_summary():
