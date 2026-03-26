@@ -1016,6 +1016,8 @@ def plot_deterministic_results(
             subdir_name = "_".join(label_parts)
         else:
             subdir_name = "_default"
+        if result_kind != "sequence":
+            subdir_name = f"{subdir_name}_{result_kind}"
 
     plot_dir = base_plot_dir / subdir_name if subdir_name else base_plot_dir
 
