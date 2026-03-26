@@ -745,6 +745,71 @@ def _build_overlay_plot_spec(
     return result
 
 
+_GROUP_STYLE_KEYS = (
+    "group_colors",
+    "group_styles",
+    "marker_styles",
+    "group_titles",
+    "band_colors",
+    "band_alphas",
+)
+
+
+def _expand_group_style_dicts(
+    kwargs: Dict[str, Any],
+    name_to_parts: Dict[str, tuple],
+    style_level: str,
+) -> Dict[str, Any]:
+    """
+    Expand per-group style dicts in kwargs using label decomposition.
+
+    For style_level="full" (default): if a group name has no direct entry,
+    fall back to the model label, then the experiment label.
+
+    For style_level="model" or "experiment": use the specified component as
+    the lookup key, filling in the group name's entry from that component.
+
+    Parameters
+    ----------
+    kwargs : dict
+        Plot kwargs dict (will not be mutated; a shallow copy is returned).
+    name_to_parts : dict
+        Mapping from group display name to (model_label, experiment_label).
+    style_level : str
+        "full", "model", or "experiment".
+
+    Returns
+    -------
+    dict
+        Updated kwargs with expanded style dicts.
+    """
+    if not name_to_parts:
+        return kwargs
+
+    result = dict(kwargs)
+    for key in _GROUP_STYLE_KEYS:
+        d = result.get(key)
+        if not d:
+            continue
+        expanded = dict(d)
+        for name, (model, experiment) in name_to_parts.items():
+            if name in expanded:
+                continue
+            if style_level == "full":
+                for fb in [k for k in [model, experiment] if k]:
+                    if fb in expanded:
+                        expanded[name] = expanded[fb]
+                        break
+            elif style_level == "model":
+                if model and model in expanded:
+                    expanded[name] = expanded[model]
+            elif style_level == "experiment":
+                if experiment and experiment in expanded:
+                    expanded[name] = expanded[experiment]
+        result[key] = expanded
+    return result
+
+
 def plot_deterministic_results(
     results: Optional[Sequence[Union["DeterministicResult", "SequenceResult"]]] = None,
     include_list: Optional[Sequence[str]] = None,
@@ -771,6 +836,7 @@ def plot_deterministic_results(
     overlay_color: Optional[str] = None,
     overlay_kwargs: Optional[Dict[str, Any]] = None,
     overlay_spec: Optional[PlotSpec] = None,
+    style_level: str = "full",
     **kwargs,
 ) -> List[Path]:
     """
@@ -792,6 +858,13 @@ def plot_deterministic_results(
     result_kind : str, default "sequence"
         Type of labeled results to load: "sequence", "linear_sequence", or
         "deterministic".
+    style_level : str, default "full"
+        Controls which part of the label is used as the key when looking up
+        per-group styles (group_colors, group_styles, etc.) from result_labels.
+        "full" uses the combined "model_experiment" name and falls back to
+        "model" then "experiment" if not found. "model" uses only the model
+        label as the key. "experiment" uses only the experiment label.
+        Only applies to results loaded via result_labels.
     save_dir : str or Path, optional
         Base directory used to load labeled results. Defaults to settings.
     include_list : Sequence[str], optional
@@ -1021,9 +1094,21 @@ def plot_deterministic_results(
 
     plot_dir = base_plot_dir / subdir_name if subdir_name else base_plot_dir
 
+    # Build name_to_parts for style fallback/level resolution.
+    # Label-loaded results occupy positions [n_explicit : n_explicit + n_labeled]
+    # in prep.result_names.
+    name_to_parts: Dict[str, tuple] = {}
+    if result_labels:
+        n_explicit = len(results) if results else 0
+        for i, (model_label, experiment_label) in enumerate(result_labels):
+            name = prep.result_names[n_explicit + i]
+            name_to_parts[name] = (model_label, experiment_label)
+
     # Call plot_paths with the prepared data
     plot_kwargs = plot_spec.to_kwargs() if plot_spec is not None else {}
-    merged_kwargs = {**plot_kwargs, **kwargs}
+    merged_kwargs = _expand_group_style_dicts(
+        {**plot_kwargs, **kwargs}, name_to_parts, style_level
+    )
 
     return plot_paths(
         path_vals=prep.path_vals,
