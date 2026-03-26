@@ -52,12 +52,10 @@ def gradient(f, x, args=None, kwargs=None, step=1e-5, two_sided=True, f_val=None
     x = np.array(x).copy()
     grad = None
     for ii in range(len(x)):
-
         x[ii] += step
         f_hi = f(x, *args, **kwargs)
 
         if two_sided:
-
             x[ii] -= 2.0 * step
             f_lo = f(x, *args, **kwargs)
             x[ii] += step
@@ -65,7 +63,6 @@ def gradient(f, x, args=None, kwargs=None, step=1e-5, two_sided=True, f_val=None
             df_i = np.array(f_hi - f_lo) / (2.0 * step)
 
         else:
-
             x[ii] -= step
 
             df_i = np.array(f_hi - f_val) / step
@@ -167,7 +164,6 @@ def root(
         callback(iteration, x, f_val, dist)
 
     while (dist > tol) and (iteration <= max_iterations):
-
         iteration += 1
 
         # Get Jacobian

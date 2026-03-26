@@ -473,8 +473,7 @@ def _build_param_to_model(
     if isinstance(template_spec, LinearSpec):
         if len(shock_params) > 1:
             raise ValueError(
-                "LinearSpec supports at most one ShockParam, "
-                f"got {len(shock_params)}"
+                f"LinearSpec supports at most one ShockParam, got {len(shock_params)}"
             )
         if len(regime_params) > 0:
             raise ValueError("LinearSpec does not support RegimeParam")

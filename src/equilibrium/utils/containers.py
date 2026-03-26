@@ -52,9 +52,7 @@ class PresetDict(dict):
             self[k] = v
 
     def overwrite_item(self, key, value):
-
         super().__setitem__(key, value)
 
     def overwrite_update(self, other):
-
         super().update(other)

@@ -574,7 +574,6 @@ class Model:
         #         # toc(start)
 
     def fcn(self, name, *args):
-
         std_args = standardize_args(*args)
         # Get the bundle (same primal for all argnums)
         bundle = self._shared_function_bundles[name]["bundle"]
@@ -667,7 +666,6 @@ class Model:
         return DerivativeResult(jac_tuple, argnums_list, var_to_argnum)
 
     def d_wrt_multi(self, name, wrt_list, args):
-
         bundle_info = self._shared_function_bundles[name]
         bundle = bundle_info["bundle"]
         var_to_argnum = bundle_info["var_to_argnum"]
@@ -747,7 +745,6 @@ class Model:
         return mod
 
     def create_core_state_array(self, u=None, x=None, z=None, E=None, params=None):
-
         arrays = {"u": u, "x": x, "z": z, "E": E, "params": params}
 
         for key in self.core_var_types:
@@ -843,7 +840,6 @@ class Model:
         return f"{lhs_str} = {rhs_str}"
 
     def expectations(self, u, x, z, u_new, x_new, z_new, params):
-
         # u, x, z, u_new, x_new, z_new, params = standardize_args(u, x, z, u_new, x_new, z_new, params)
         st = self.array_to_state_plus_intermediates(u=u, x=x, z=z, params=params)
         st_new = self.array_to_state_plus_intermediates(
@@ -852,32 +848,27 @@ class Model:
         return self.inner_functions.expectations_inner(st, st_new)
 
     def transition(self, u, x, z, params):
-
         # u, x, z, params = standardize_args(u, x, z, params)
         st = self.array_to_state_plus_intermediates(u=u, x=x, z=z, params=params)
         return self.inner_functions.transition_inner(st)
 
     def optimality(self, u, x, z, E, params):
-
         # u, x, z, E, params = standardize_args(u, x, z, E, params)
         st = self.array_to_state_plus_intermediates(u=u, x=x, z=z, E=E, params=params)
         st = self.inner_functions.read_expectations_variables(st)
         return self.inner_functions.optimality_inner(st)
 
     def intermediates(self, u, x, z, params):
-
         # u, x, z, params = standardize_args(u, x, z, params)
         st = self.array_to_state(u=u, x=x, z=z, params=params)
         return self.inner_functions.intermediate_variables_array(st)
 
     def expectations_variables(self, u, x, z, E, params):
-
         # u, x, z, E, params = standardize_args(u, x, z, E, params)
         st = self.array_to_state(u=u, x=x, z=z, E=E, params=params)
         return self.inner_functions.read_expectations_variables_array(st)
 
     def dict_to_components(self, st):
-
         # components = {}
         for name in ["u", "x", "z", "params"]:
             self.steady_components[name] = jnp.array(
@@ -885,7 +876,6 @@ class Model:
             )
 
     def get_steady_err(self, u, x, z, params):
-
         x_new = self.transition(u, x, z, params)
         E = self.expectations(u, x, z, u, x, z, params)
 
@@ -899,7 +889,6 @@ class Model:
         return err_all
 
     def objfcn_steady(self, ux, z, params):
-
         # ux, z, params = standardize_args(ux, z, params)
         u, x = jnp.split(ux, [self.N["u"]])
         return self.get_steady_err(u, x, z, params)
@@ -928,7 +917,6 @@ class Model:
         return jnp.vstack((d_trans, d_optimality))
 
     def initialize_values(self, init_dict):
-
         init_vals = {}
         for name in ["u", "x", "params"]:
             values_list = []
@@ -982,7 +970,6 @@ class Model:
             init_dict = self.init_dict
 
         if self.steady_flag:
-
             if init_vals is None:
                 init_vals = self.initialize_values(init_dict)
 
@@ -1276,7 +1263,6 @@ class Model:
                 )
 
         else:
-
             if load_initial_guess:
                 # Always try to load from calibrated version first to get both
                 # steady state values and calibrated parameters
@@ -2009,7 +1995,6 @@ class Model:
         )
 
     def get_s_steady(self):
-
         init_vals = self.initialize_values(self.steady_dict)
         u, x, z, params = (
             init_vals["u"],
@@ -2024,7 +2009,6 @@ class Model:
         return np.hstack((u, x, z, inter, E, exp_vars))
 
     def simulate_linear(self, Nt, s_init=None, shocks=None):
-
         return self.linear_mod.simulate(Nt, s_init=s_init, shocks=shocks)
 
     def compute_linear_irfs(
@@ -2470,7 +2454,6 @@ class Model:
                         )
 
     def _update_rules(self):
-
         # Apply variable transformations first, before any other rule processing
         self._apply_transformations()
 
@@ -2539,7 +2522,6 @@ class Model:
             ("expectations", "expectations_inner"),
             ("optimality", "optimality_inner"),
         ]:
-
             args = ["st", "st_new"] if key == "expectations" else ["st"]
 
             this_fcn = {"name": fname}
@@ -2557,7 +2539,6 @@ class Model:
             ("intermediate", "intermediate_variables"),
             ("read_expectations", "read_expectations_variables"),
         ]:
-
             ignore_vars = self.var_lists[key]
 
             this_fcn = {"name": f"{name}"}

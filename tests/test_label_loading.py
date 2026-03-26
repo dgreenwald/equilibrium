@@ -7,7 +7,6 @@ This module tests the new functionality for loading saved IRFs and deterministic
 results by their labels, enabling memory-efficient workflows.
 """
 
-
 import numpy as np
 import pytest
 

@@ -44,7 +44,6 @@ class CompilationCounter:
 
 
 def set_model(flags=None, params=None, steady_guess=None, **kwargs):
-
     mod = Model(flags=flags, params=params, steady_guess=steady_guess, **kwargs)
 
     mod.params.update(

@@ -50,7 +50,6 @@ def st_bond_block(
     *,
     include_lag: bool = False,
 ) -> ModelBlock:
-
     block.rules["expectations"] += [
         ("E_Lam_AGENT", "(Lam_1_nom_AGENT_NEXT / Lam_0_AGENT)"),
     ]

@@ -545,15 +545,15 @@ def test_exogenous_persistence_tight_timing():
     assert np.allclose(result.regimes[3].Z[0, :], result.regimes[2].Z[1, :])
 
     # The handed-off z must NOT be zero (exogenous persistence preserved)
-    assert not np.allclose(result.regimes[1].Z[0, :], 0.0), (
-        "Regime 1 received a zero z_init — persistence was lost"
-    )
-    assert not np.allclose(result.regimes[2].Z[0, :], 0.0), (
-        "Regime 2 received a zero z_init — persistence was lost"
-    )
-    assert not np.allclose(result.regimes[3].Z[0, :], 0.0), (
-        "Regime 3 received a zero z_init — persistence was lost"
-    )
+    assert not np.allclose(
+        result.regimes[1].Z[0, :], 0.0
+    ), "Regime 1 received a zero z_init — persistence was lost"
+    assert not np.allclose(
+        result.regimes[2].Z[0, :], 0.0
+    ), "Regime 2 received a zero z_init — persistence was lost"
+    assert not np.allclose(
+        result.regimes[3].Z[0, :], 0.0
+    ), "Regime 3 received a zero z_init — persistence was lost"
 
 
 def test_exogenous_persistence_splice_tight_timing():
@@ -575,9 +575,9 @@ def test_exogenous_persistence_splice_tight_timing():
     # Spliced Z should not have any abrupt resets to zero
     # Each shock adds to the decaying exogenous state
     for t in range(1, min(5, spliced.Z.shape[0])):
-        assert not np.allclose(spliced.Z[t, :], 0.0), (
-            f"Spliced Z at t={t} is zero — persistence was lost"
-        )
+        assert not np.allclose(
+            spliced.Z[t, :], 0.0
+        ), f"Spliced Z at t={t} is zero — persistence was lost"
 
 
 if __name__ == "__main__":

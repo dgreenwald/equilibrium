@@ -4,7 +4,6 @@
 Tests for calibration I/O and automatic saving.
 """
 
-
 import numpy as np
 import pytest
 

@@ -86,7 +86,6 @@ def compute_time_period(
     z_t = Z[tt, :]
 
     if tt > 0:
-
         u_lag, x_lag = np.split(UX[tt - 1, :], np.array((mod.N["u"],)))
         z_lag = Z[tt - 1, :]
 
@@ -94,12 +93,10 @@ def compute_time_period(
         x_star = mod.fcn("transition", u_lag, x_lag, z_lag, params)
 
     if tt < Nt - 1:
-
         u_next, x_next = np.split(UX[tt + 1, :], np.array((mod.N["u"],)))
         z_next = Z[tt + 1, :]
 
     if tt == 0:
-
         f_t = (ux_t - ux_init)[:, np.newaxis]
 
         if compute_grad:
@@ -108,9 +105,7 @@ def compute_time_period(
             F_t = np.zeros((N_ux, N_ux))
 
     elif tt == Nt - 1:
-
         if terminal_condition == "stable":
-
             x_hat = x_t - mod.steady_components["x"]
             z_hat = z_t - mod.steady_components["z"]
 
@@ -128,7 +123,6 @@ def compute_time_period(
             )
 
             if compute_grad:
-
                 trans_derivs = mod.d_all("transition", u_lag, x_lag, z_lag, params)
 
                 L_t = np.vstack(
@@ -150,7 +144,6 @@ def compute_time_period(
                 F_t = np.zeros((N_ux, N_ux))
 
         elif terminal_condition == "steady":
-
             f_t = np.vstack(
                 (
                     (u_t - mod.steady_components["u"])[:, np.newaxis],
@@ -164,7 +157,6 @@ def compute_time_period(
                 F_t = np.zeros((N_ux, N_ux))
 
     else:
-
         E = mod.fcn("expectations", u_t, x_t, z_t, u_next, x_next, z_next, params)
 
         f_t = np.vstack(
@@ -175,7 +167,6 @@ def compute_time_period(
         )
 
         if compute_grad:
-
             # d_opt_d_E = mod.jacobians['optimality']['E'](u_t, x_t, z_t, E, params)
             d_opt_d_E = mod.d("optimality", "E", u_t, x_t, z_t, E, params)
 
@@ -267,7 +258,6 @@ def objfcn(mod, UX, Z, ux_init, compute_grad=True, terminal_condition="stable"):
     f_all = np.zeros((Nt, N_ux))
 
     if compute_grad:
-
         M_all = np.zeros((Nt, N_ux, N_ux))
         d_all = np.zeros((Nt, N_ux))
 
@@ -277,11 +267,9 @@ def objfcn(mod, UX, Z, ux_init, compute_grad=True, terminal_condition="stable"):
         step = np.zeros((Nt, N_ux))
 
     else:
-
         step = None
 
     for tt in range(Nt):
-
         f_t, L_t, C_t, F_t = compute_time_period(
             tt, Nt, UX, Z, ux_init, mod, params, N_ux, compute_grad, terminal_condition
         )
@@ -289,7 +277,6 @@ def objfcn(mod, UX, Z, ux_init, compute_grad=True, terminal_condition="stable"):
         f_all[tt, :] = f_t.ravel()
 
         if compute_grad:
-
             CLM_inv = np.linalg.inv(C_t - L_t @ M_t)
             M_t = CLM_inv @ F_t
             d_t = -CLM_inv @ (f_t + L_t @ d_t)
@@ -301,7 +288,6 @@ def objfcn(mod, UX, Z, ux_init, compute_grad=True, terminal_condition="stable"):
     if compute_grad:
         dy = np.zeros(N_ux)
         for tt in range(Nt - 1, -1, -1):
-
             dy = d_all[tt, :] - M_all[tt, :, :] @ dy
             step[tt, :] = dy
 
@@ -706,7 +692,6 @@ def _solve_lbj_internal(
     logger.info("Initial deterministic residual: %g", dist)
 
     while dist > tol:
-
         _, step = objfcn(
             mod,
             UX,
@@ -718,7 +703,6 @@ def _solve_lbj_internal(
         dist_new = dist + 1.0
 
         while dist_new > dist:
-
             UX_new = UX + step
             f_all, _ = objfcn(
                 mod,
@@ -781,13 +765,11 @@ def _solve_sparse_internal(
     logger.info("Initial deterministic residual: %g", dist)
 
     while dist > tol:
-
         # Compute step using sparse solver
         step = solve_sparse_step(f_all, L_all, C_all, F_all)
         dist_new = dist + 1.0
 
         while dist_new > dist:
-
             UX_new = UX + step
             # Only compute residuals (not Jacobian) for backstepping
             f_all_new, _, _, _ = compute_jacobian_blocks(

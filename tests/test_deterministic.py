@@ -21,7 +21,6 @@ jax.config.update("jax_enable_x64", True)
 
 
 def set_model(flags=None, params=None, steady_guess=None, **kwargs):
-
     mod = Model(flags=flags, params=params, steady_guess=steady_guess, **kwargs)
 
     mod.params.update(
@@ -1083,9 +1082,9 @@ def test_solve_sequence_exogenous_persistence_tight_timing():
     assert np.allclose(result.regimes[3].Z[0, :], result.regimes[2].Z[1, :])
 
     # The handed-off z must NOT be zero (exogenous persistence preserved)
-    assert not np.allclose(result.regimes[1].Z[0, :], 0.0), (
-        "Regime 1 received a zero z_init — persistence was lost"
-    )
+    assert not np.allclose(
+        result.regimes[1].Z[0, :], 0.0
+    ), "Regime 1 received a zero z_init — persistence was lost"
 
 
 def _run_all_with_summary():

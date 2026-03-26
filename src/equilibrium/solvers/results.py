@@ -311,7 +311,7 @@ class PathResult:
             import pandas as pd
         except ImportError as e:
             raise ImportError(
-                "pandas is required for to_df(). " "Install it with: pip install pandas"
+                "pandas is required for to_df(). Install it with: pip install pandas"
             ) from e
 
         # Build the dataframe
@@ -799,9 +799,7 @@ class SequenceResult:
                     # delta periods (the number of new periods this regime
                     # contributes to the spliced path).
                     delta = self.time_list[i] - self.time_list[i - 1]
-                    n_periods = min(
-                        delta, regime.UX.shape[0] - 1, T_max - current_time
-                    )
+                    n_periods = min(delta, regime.UX.shape[0] - 1, T_max - current_time)
                     start_idx = 1
             else:
                 # Last regime: take remaining periods needed
