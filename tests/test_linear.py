@@ -132,9 +132,9 @@ class TestSolveSequenceLinear:
             assert result.regimes[i].Z.shape == (Nt, mod.N["z"])
 
         # The second regime should have initial conditions from the first
-        # time_list[0]=5 means transition at time 5, with start_time=1,
-        # transition_time in path = 5-1 = 4, so Z[0] for regime 1 should equal Z[4] from regime 0
-        assert np.allclose(result.regimes[1].Z[0, :], result.regimes[0].Z[4, :])
+        # time_list[0]=5 means transition at time 5, with start_time=0,
+        # transition_time in path = 5, so Z[0] for regime 1 should equal Z[5] from regime 0
+        assert np.allclose(result.regimes[1].Z[0, :], result.regimes[0].Z[5, :])
 
     def test_initial_conditions_transfer(self):
         """Test that initial conditions are properly passed between regimes."""
@@ -148,9 +148,9 @@ class TestSolveSequenceLinear:
         Nt = 20
         result = linear.solve_sequence_linear(spec, mod, Nt)
 
-        # time_list[0]=10 means transition at time 10, with start_time=1,
-        # transition_time in path = 10-1 = 9
-        transition_idx = 9
+        # time_list[0]=10 means transition at time 10, with start_time=0,
+        # transition_time in path = 10
+        transition_idx = 10
         z_at_transition = result.regimes[0].Z[transition_idx, :]
         ux_at_transition = result.regimes[0].UX[transition_idx, :]
 
@@ -514,6 +514,70 @@ def test_solve_sequence_linear_display_steady_flag():
         spec2, mod2, Nt=10, calibrate_initial=True, display_steady=True
     )
     assert result2.regimes[0].converged
+
+
+def test_exogenous_persistence_tight_timing():
+    """Test that exogenous state persists across regimes with time_list=[1,2,3].
+
+    This is the core regression test for the handoff fix: with
+    start_time=0 the transition index equals time_list[r], so even
+    Delta_r=1 hands off the post-shock exogenous state.
+    """
+    mod = set_model()
+    mod.solve_steady(calibrate=True)
+    mod.linearize()
+
+    # 4 regimes, each contributing exactly one new period
+    spec = DetSpec(n_regimes=4, time_list=[1, 2, 3])
+    spec.add_shock(0, "Z_til", 0, 0.10)
+    spec.add_shock(1, "Z_til", 0, 0.05)
+    spec.add_shock(2, "Z_til", 0, 0.03)
+    spec.add_shock(3, "Z_til", 0, 0.01)
+
+    Nt = 20
+    result = linear.solve_sequence_linear(spec, mod, Nt)
+
+    # Regime 0 hands off at index time_list[0]=1 (post-shock state)
+    assert np.allclose(result.regimes[1].Z[0, :], result.regimes[0].Z[1, :])
+    # Regime 1 hands off at index time_list[1]-time_list[0]=1
+    assert np.allclose(result.regimes[2].Z[0, :], result.regimes[1].Z[1, :])
+    # Regime 2 hands off at index time_list[2]-time_list[1]=1
+    assert np.allclose(result.regimes[3].Z[0, :], result.regimes[2].Z[1, :])
+
+    # The handed-off z must NOT be zero (exogenous persistence preserved)
+    assert not np.allclose(result.regimes[1].Z[0, :], 0.0), (
+        "Regime 1 received a zero z_init — persistence was lost"
+    )
+    assert not np.allclose(result.regimes[2].Z[0, :], 0.0), (
+        "Regime 2 received a zero z_init — persistence was lost"
+    )
+    assert not np.allclose(result.regimes[3].Z[0, :], 0.0), (
+        "Regime 3 received a zero z_init — persistence was lost"
+    )
+
+
+def test_exogenous_persistence_splice_tight_timing():
+    """Test that the spliced path from tight timing is smooth and non-zero."""
+    mod = set_model()
+    mod.solve_steady(calibrate=True)
+    mod.linearize()
+
+    spec = DetSpec(n_regimes=3, time_list=[1, 2])
+    spec.add_shock(0, "Z_til", 0, 0.10)
+    spec.add_shock(1, "Z_til", 0, 0.05)
+    spec.add_shock(2, "Z_til", 0, 0.01)
+
+    Nt = 20
+    result = linear.solve_sequence_linear(spec, mod, Nt)
+
+    spliced = result.splice()
+
+    # Spliced Z should not have any abrupt resets to zero
+    # Each shock adds to the decaying exogenous state
+    for t in range(1, min(5, spliced.Z.shape[0])):
+        assert not np.allclose(spliced.Z[t, :], 0.0), (
+            f"Spliced Z at t={t} is zero — persistence was lost"
+        )
 
 
 if __name__ == "__main__":

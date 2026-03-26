@@ -786,17 +786,21 @@ class SequenceResult:
         for i, regime in enumerate(self.regimes):
             if i < len(self.time_list):
                 # Not the last regime: take periods up to and including transition
-                end_time = self.time_list[i]
                 if i == 0:
                     # First regime: include all periods from 0 to transition time
                     n_periods = min(
-                        end_time + 1, regime.UX.shape[0], T_max - current_time
+                        self.time_list[0] + 1,
+                        regime.UX.shape[0],
+                        T_max - current_time,
                     )
                     start_idx = 0
                 else:
-                    # Subsequent regimes: skip period 0 (duplicate) and take up to transition
+                    # Subsequent regimes: skip period 0 (duplicate) and take
+                    # delta periods (the number of new periods this regime
+                    # contributes to the spliced path).
+                    delta = self.time_list[i] - self.time_list[i - 1]
                     n_periods = min(
-                        end_time, regime.UX.shape[0] - 1, T_max - current_time
+                        delta, regime.UX.shape[0] - 1, T_max - current_time
                     )
                     start_idx = 1
             else:

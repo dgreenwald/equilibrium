@@ -44,8 +44,8 @@ def solve_sequence_linear(
     For each regime after the first, initial conditions are taken from
     the previous regime's solution at the transition time specified in
     det_spec.time_list.
-    The initial state at t=0 is the baseline steady state; the first
-    regime in det_spec is applied starting at t=1.
+    The initial state at t=0 is the baseline steady state; regime
+    path indices map to absolute times starting from 0.
 
     In the linear model, the variables follow:
         x_new = H_x @ x_hat + H_z @ z_hat
@@ -148,7 +148,7 @@ def solve_sequence_linear(
     else:
         current_ux_init = np.asarray(ux_init)
     prev_preset_par = None
-    start_time = 1
+    start_time = 0
     should_save_regime_steady = save_regime_steady or save_regime_steady_tex
     model_label = getattr(mod, "label", "_default")
     experiment_label = getattr(det_spec, "label", "_default")
@@ -300,7 +300,7 @@ def solve_sequence_linear(
 
             current_z_init = Z_path[transition_time, :]
             current_ux_init = UX[transition_time, :]
-            start_time = det_spec.time_list[regime] + 1
+            start_time = det_spec.time_list[regime]
 
         # Remember current params for comparison
         prev_preset_par = current_preset_par
