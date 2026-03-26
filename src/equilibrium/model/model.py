@@ -2378,8 +2378,14 @@ class Model:
                                 new_expr,
                             )
 
-                        # Then apply transformation to the entire RHS
-                        new_expr = f"{transform_fn}({new_expr})"
+                        # Apply transformation to the entire RHS only for rules
+                        # that define the variable as an expression (intermediate,
+                        # transition, analytical_steady, etc.). Residual-based rules
+                        # (optimality, calibration) must NOT be wrapped: the RHS is
+                        # a residual driven to zero, not an assignment, so wrapping
+                        # with transform_fn changes the zero-crossing incorrectly.
+                        if category not in ("optimality", "calibration"):
+                            new_expr = f"{transform_fn}({new_expr})"
                         new_rules[new_var_name] = new_expr
                     else:
                         # This rule is not being transformed, but may reference transformed vars
