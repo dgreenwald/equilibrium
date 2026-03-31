@@ -879,6 +879,17 @@ def calibrate(
         """
         params = np.atleast_1d(params)
 
+        # Enforce parameter bounds before running the solver
+        if bounds is not None:
+            for val, (lo, hi) in zip(params, bounds):
+                if val < lo or val > hi:
+                    if return_weights:
+                        return np.full(n_targets, 1e10), np.ones(n_targets)
+                    else:
+                        if is_scalar and n_targets == 1:
+                            return 1e10
+                        return np.full(n_targets, 1e10)
+
         try:
             # Get model and spec from parameters
             mod, spec_from_params = param_to_model(params)
@@ -1119,6 +1130,14 @@ def calibrate(
         logger.error("Error computing final solution: %s", str(e))
         result.solution = None
         result.model = None
+
+    # Override solver-reported success if residual is not actually small
+    if result.success and result.residual > 10 * tol:
+        result.success = False
+        result.message = (
+            f"Solver reported converged but residual {result.residual:.6g} "
+            f"exceeds tolerance {tol:.6g}"
+        )
 
     # Handle automatic saving or error reporting
     if label is not None:
