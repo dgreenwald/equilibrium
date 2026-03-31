@@ -66,6 +66,7 @@ class PlotSpec:
     series_transforms: Optional[
         Mapping[str, Union["SeriesTransform", Mapping[str, Any]]]
     ] = None
+    var_ylims: Optional[Dict[str, tuple[float, float]]] = None
     plot_kwargs: Dict[str, Any] = field(default_factory=dict)
 
     def to_kwargs(self) -> Dict[str, Any]:
@@ -94,6 +95,8 @@ class PlotSpec:
             kwargs["zero_line"] = self.zero_line
         if self.zero_line_kwargs is not None:
             kwargs["zero_line_kwargs"] = self.zero_line_kwargs
+        if self.var_ylims is not None:
+            kwargs["var_ylims"] = self.var_ylims
         if self.plot_kwargs:
             kwargs.update(self.plot_kwargs)
         return kwargs
@@ -211,6 +214,7 @@ def plot_paths(
     band_colors: Optional[Dict[str, str]] = None,
     band_alphas: Optional[Dict[str, float]] = None,
     var_in_title: bool = False,
+    var_ylims: Optional[Dict[str, tuple[float, float]]] = None,
     clear_previous: bool = True,
     announce_dir: bool = True,
     print_periods: Optional[Sequence[int]] = None,
@@ -485,6 +489,9 @@ def plot_paths(
                 ylim = (ymin - 0.1 * spread, ymax + 0.1 * spread)
             else:
                 ylim = None
+
+            if var_ylims is not None and vname in var_ylims:
+                ylim = var_ylims[vname]
 
             # zero line
             if zero_line:
@@ -837,6 +844,7 @@ def plot_deterministic_results(
     overlay_kwargs: Optional[Dict[str, Any]] = None,
     overlay_spec: Optional[PlotSpec] = None,
     style_level: str = "full",
+    var_ylims: Optional[Dict[str, tuple[float, float]]] = None,
     **kwargs,
 ) -> List[Path]:
     """
@@ -1106,6 +1114,8 @@ def plot_deterministic_results(
 
     # Call plot_paths with the prepared data
     plot_kwargs = plot_spec.to_kwargs() if plot_spec is not None else {}
+    if var_ylims is not None:
+        kwargs["var_ylims"] = var_ylims
     merged_kwargs = _expand_group_style_dicts(
         {**plot_kwargs, **kwargs}, name_to_parts, style_level
     )
