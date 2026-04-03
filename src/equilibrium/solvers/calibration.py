@@ -1326,6 +1326,26 @@ def _solve_scalar_root(
     if method is None:
         method = "brentq"  # Robust bracketing method
 
+    def _call_root_scalar(selected_method: str):
+        if selected_method == "secant":
+            x1 = bracket[1] if x0 != bracket[1] else bracket[0]
+            return opt.root_scalar(
+                func,
+                method=selected_method,
+                x0=x0,
+                x1=x1,
+                xtol=tol,
+                maxiter=maxiter,
+            )
+
+        return opt.root_scalar(
+            func,
+            method=selected_method,
+            bracket=bracket,
+            xtol=tol,
+            maxiter=maxiter,
+        )
+
     def _safe_residual(x):
         try:
             return float(abs(func(x)))
@@ -1333,13 +1353,7 @@ def _solve_scalar_root(
             return np.inf
 
     try:
-        sol = opt.root_scalar(
-            func,
-            method=method,
-            bracket=bracket,
-            xtol=tol,
-            maxiter=maxiter,
-        )
+        sol = _call_root_scalar(method)
 
         return CalibrationResult(
             parameters={"param_0": sol.root},
@@ -1355,16 +1369,8 @@ def _solve_scalar_root(
         # Brent-style methods require a sign change; fall back to secant if absent.
         msg = str(e)
         if "different signs" in msg or "sign" in msg:
-            x1 = bracket[1] if x0 != bracket[1] else bracket[0]
             try:
-                sol = opt.root_scalar(
-                    func,
-                    method="secant",
-                    x0=x0,
-                    x1=x1,
-                    xtol=tol,
-                    maxiter=maxiter,
-                )
+                sol = _call_root_scalar("secant")
                 return CalibrationResult(
                     parameters={"param_0": sol.root},
                     parameters_array=np.array([sol.root]),
