@@ -951,6 +951,7 @@ class Model:
         backup_to_use: int | None = None,
         verbose_iterations: bool = False,
         solver: str = "newton",
+        initial_guess_from_label: str | None = None,
     ) -> bool:
         """Internal helper that performs one steady-state solve attempt.
 
@@ -964,6 +965,9 @@ class Model:
             enabled, otherwise "scipy". If "newton" fails, falls back to "scipy".
         save_tex : bool, optional
             If True, export steady state values to LaTeX property list files.
+        initial_guess_from_label : str | None, optional
+            If provided, load the initial guess from an alternative model's
+            saved steady state file. Raises FileNotFoundError if not found.
         """
 
         if init_dict is None:
@@ -1269,6 +1273,7 @@ class Model:
                 loaded = self.load_steady(
                     load_calibration=True,
                     backup_to_use=backup_to_use,
+                    _from_label=initial_guess_from_label,
                 )
 
                 # If calibrated version not found, try non-calibrated version
@@ -1276,6 +1281,7 @@ class Model:
                     loaded = self.load_steady(
                         load_calibration=False,
                         backup_to_use=backup_to_use,
+                        _from_label=initial_guess_from_label,
                     )
 
                 if loaded:
@@ -1510,17 +1516,30 @@ class Model:
         self._steady_solved = True
         self._calibrated = calibrate
 
-    def _load_steady_snapshot(self, backup_to_use: int | None = None):
-        """Load steady-state values previously saved with :meth:`solve_steady`."""
+    def _load_steady_snapshot(
+        self, backup_to_use: int | None = None, _from_label: str | None = None
+    ):
+        """Load steady-state values previously saved with :meth:`solve_steady`.
 
-        path = self._steady_snapshot_path()
+        Parameters
+        ----------
+        backup_to_use : int | None, optional
+            Index of backup file to use (0 = most recent). If None, uses main file.
+        _from_label : str | None, optional
+            If provided, load from this alternative model's label instead of self.label.
+            Raises FileNotFoundError if the file does not exist.
+        """
+
+        path = self._steady_snapshot_path(_from_label=_from_label)
 
         if backup_to_use is not None:
             if backup_to_use < 0:
                 logger.warning("Backup index must be non-negative; skipping load.")
                 return {}
 
-            stem = f"{self.label}_steady_state"
+            # Use the appropriate label for finding backups
+            label_for_backups = _from_label if _from_label is not None else self.label
+            stem = f"{label_for_backups}_steady_state"
             backups = io.list_steady_backups(path, stem=stem)
             if not backups:
                 logger.info("No steady-state backups available; skipping load.")
@@ -1557,6 +1576,7 @@ class Model:
         display: bool = True,
         verbose_iterations: bool = False,
         solver: str = "newton",
+        initial_guess_from_label: str | None = None,
     ):
         """
         Solve for the steady state with retries using fallback initial guesses.
@@ -1576,6 +1596,13 @@ class Model:
             If True, export steady state values to LaTeX property list files
             in {plot_dir}/tex/. Default is False. If calibrate=True, also exports
             calibrated parameters.
+        initial_guess_from_label : str | None, optional
+            If provided, load the initial guess for the steady state solve from
+            an alternative model's saved steady state file. The file will be
+            {initial_guess_from_label}_steady_state.json. This is useful when
+            the current model's saved steady state is corrupted or problematic.
+            If None (default), loads from this model's own label.
+            Raises FileNotFoundError if the alternative file does not exist.
         """
 
         attempt_count = 0
@@ -1596,6 +1623,7 @@ class Model:
                 backup_to_use=kwargs.get("backup_to_use", backup_to_use),
                 verbose_iterations=use_verbose,
                 solver=solver,
+                initial_guess_from_label=initial_guess_from_label,
             )
             if self.steady_flag:
                 if success:
@@ -1658,8 +1686,21 @@ class Model:
         *,
         load_calibration: bool = True,
         backup_to_use: int | None = None,
+        _from_label: str | None = None,
     ):
-        """Load steady-state solution from the cached steady or calibration model."""
+        """Load steady-state solution from the cached steady or calibration model.
+
+        Parameters
+        ----------
+        load_calibration : bool, optional
+            If True, load from calibrated steady state model. If False, load from
+            non-calibrated steady state model. Default is True.
+        backup_to_use : int | None, optional
+            Index of backup file to use (0 = most recent). If None, uses main file.
+        _from_label : str | None, optional
+            Internal parameter to load from an alternative model's label.
+            For external use, see solve_steady(initial_guess_from_label=...).
+        """
 
         target = self.mod_steady_cal if load_calibration else self.mod_steady
         if target is None:
@@ -1670,8 +1711,18 @@ class Model:
         try:
             # Load from parent model's path (not sub-model's path)
             # because _save_steady_snapshot is called on the parent
-            self.steady_dict = self._load_steady_snapshot(backup_to_use=backup_to_use)
-        except FileNotFoundError:
+            self.steady_dict = self._load_steady_snapshot(
+                backup_to_use=backup_to_use, _from_label=_from_label
+            )
+        except FileNotFoundError as e:
+            # If loading from an alternative label, re-raise the error
+            # Otherwise, just log a warning and return empty dict
+            if _from_label is not None:
+                raise FileNotFoundError(
+                    f"Cannot load initial guess from model '{_from_label}': "
+                    f"File '{_from_label}_steady_state.json' not found. "
+                    f"Ensure that model has been solved with save=True."
+                ) from e
             logger.warning(
                 "No saved steady-state snapshot found; run solve_steady(save=True) first."
             )
@@ -1811,11 +1862,25 @@ class Model:
             )
         )
 
-    def _steady_snapshot_path(self):
+    def _steady_snapshot_path(self, _from_label: str | None = None):
+        """Get the path to the steady state snapshot file.
+
+        Parameters
+        ----------
+        _from_label : str | None, optional
+            If provided, construct path for this alternative label instead of self.label.
+
+        Returns
+        -------
+        Path
+            Path to the steady state JSON file.
+        """
         settings = get_settings()
         save_dir = settings.paths.save_dir
         save_dir.mkdir(parents=True, exist_ok=True)
-        return save_dir / f"{self.label}_steady_state.json"
+
+        label = _from_label if _from_label is not None else self.label
+        return save_dir / f"{label}_steady_state.json"
 
     def _save_steady_snapshot(self):
         path = self._steady_snapshot_path()
