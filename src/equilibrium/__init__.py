@@ -12,6 +12,14 @@ from .settings import get_settings as _get_settings
 _get_settings()
 
 from . import blocks  # noqa: E402
+from .estimation import (  # noqa: E402
+    RWMC,
+    EstimationResult,
+    EstimParam,
+    Prior,
+    estimate,
+    load_estimation,
+)
 from .io import load_results, resolve_output_path, save_results  # noqa: E402
 from .model import LinearModel, Model  # noqa: E402
 from .modspec import ModSpec  # noqa: E402
@@ -67,6 +75,12 @@ __all__: list[str] = [
     "__version__",
     "Model",
     "LinearModel",
+    "Prior",
+    "RWMC",
+    "EstimParam",
+    "estimate",
+    "load_estimation",
+    "EstimationResult",
     "plot_paths",
     "plot_deterministic_results",
     "plot_model_irfs",
