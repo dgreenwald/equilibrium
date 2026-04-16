@@ -1,5 +1,8 @@
 # estimation sub-package — public API assembled here as sub-modules are completed.
 from . import numerical as numerical
+from .estimate import EstimationResult as EstimationResult
+from .estimate import EstimParam as EstimParam
+from .estimate import estimate as estimate
 from .likelihood import build_state_space as build_state_space
 from .likelihood import log_likelihood as log_likelihood
 from .likelihood import log_likelihood_ssm as log_likelihood_ssm
@@ -17,11 +20,14 @@ from .state_space import (
 )
 
 __all__ = [
+    "EstimParam",
+    "EstimationResult",
     "Prior",
     "RWMC",
     "StateSpaceEstimates",
     "StateSpaceModel",
     "build_state_space",
+    "estimate",
     "get_prior",
     "init_to_val",
     "log_likelihood",
