@@ -72,7 +72,9 @@ def test_build_state_space_selects_existing_model_variables():
     np.testing.assert_allclose(ssm.Z[2], expected_z_row)
     np.testing.assert_allclose(
         ssm.Z[4],
-        np.asarray(linear_model.L[mod.var_lists["read_expectations"].index("exp_return_gap")]),
+        np.asarray(
+            linear_model.L[mod.var_lists["read_expectations"].index("exp_return_gap")]
+        ),
     )
 
 

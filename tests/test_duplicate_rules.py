@@ -6,7 +6,6 @@ import pytest
 
 from equilibrium.utils.containers import MyOrderedDict
 
-
 # ---------------------------------------------------------------------------
 # MyOrderedDict.__add__ unit tests
 # ---------------------------------------------------------------------------
@@ -119,7 +118,9 @@ def test_get_steady_rules_calibration_overwrite_still_works():
     from equilibrium import Model
 
     mod = Model()
-    mod.params.update({"alp": 0.36, "bet": 0.95, "delta": 0.1, "PERS_Z": 0.9, "VOL_Z": 0.01})
+    mod.params.update(
+        {"alp": 0.36, "bet": 0.95, "delta": 0.1, "PERS_Z": 0.9, "VOL_Z": 0.01}
+    )
     mod.steady_guess.update({"log_K": np.log(3.0), "I": 0.3})
     mod.add_exog("Z", pers=0.9, vol=0.01)
 

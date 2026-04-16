@@ -10,7 +10,6 @@ import scipy.linalg as sla
 
 from . import numerical as nm
 
-
 _LOG_2PI = np.log(2.0 * np.pi)  # constant for multivariate normal log-pdf
 
 
@@ -113,7 +112,9 @@ class StateSpaceModel:
 
         return V_full
 
-    def simulate(self, x_1=None, Nt=None, shocks=None, meas_err=None, ix=None, use_b=True):
+    def simulate(
+        self, x_1=None, Nt=None, shocks=None, meas_err=None, ix=None, use_b=True
+    ):
         """Simulate observations and states from the model."""
         if shocks is None:
             if meas_err is None:
@@ -227,7 +228,9 @@ class StateSpaceModel:
         )
         y_det_component_samp = det_component_samp @ self.Z.T
 
-        y_shock_only_samp = y_shock_components_samp + y_det_component_samp[np.newaxis, :, :]
+        y_shock_only_samp = (
+            y_shock_components_samp + y_det_component_samp[np.newaxis, :, :]
+        )
         y_shock_removed_samp = y[np.newaxis, start_ix:, :] - y_shock_components_samp
 
         if start_ix > 0:
@@ -254,9 +257,7 @@ class StateSpaceModel:
             axis=0,
         )
 
-        y_state_only_samp = (
-            y_state_components_samp + self.b[np.newaxis, np.newaxis, :]
-        )
+        y_state_only_samp = y_state_components_samp + self.b[np.newaxis, np.newaxis, :]
         y_state_removed_samp = y[np.newaxis, start_ix:, :] - y_state_components_samp
 
         if start_ix > 0:
@@ -492,7 +493,9 @@ class StateSpaceEstimates:
         """Draw a sample of states using the simulation smoother."""
         shocks = self.ssm.draw_shocks(self.Nt - 1)
         meas_err = self.ssm.draw_meas_err(self.Nt)
-        x_1 = self.x_init + np.linalg.cholesky(self.P_init) @ np.random.randn(self.P_init.shape[0])
+        x_1 = self.x_init + np.linalg.cholesky(self.P_init) @ np.random.randn(
+            self.P_init.shape[0]
+        )
 
         y_plus, x_plus = self.ssm.simulate(
             x_1, shocks=shocks, meas_err=meas_err, ix=self.ix, use_b=False

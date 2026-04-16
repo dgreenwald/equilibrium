@@ -31,13 +31,17 @@ def _measurement_covariance(obs_names, meas_err):
 def _measurement_matrices(model, observables):
     linear_model = model.linear_mod
     if linear_model is None or linear_model.A_s is None or linear_model.B_s is None:
-        raise RuntimeError("Model must be linearized before building a state-space model.")
+        raise RuntimeError(
+            "Model must be linearized before building a state-space model."
+        )
 
     if not observables:
         raise ValueError("At least one observable must be provided.")
 
     if not getattr(model, "_steady_solved", False):
-        raise RuntimeError("Model steady state must be solved before building a state-space model.")
+        raise RuntimeError(
+            "Model steady state must be solved before building a state-space model."
+        )
 
     model.steady_state_derivatives()
 
@@ -70,7 +74,9 @@ def _measurement_matrices(model, observables):
             idx = model.var_lists["intermediate"].index(name)
             row = np.hstack(
                 [
-                    np.asarray(model.derivatives["intermediates"][var][idx, :], dtype=float)
+                    np.asarray(
+                        model.derivatives["intermediates"][var][idx, :], dtype=float
+                    )
                     for var in ["u", "x", "z"]
                 ]
             )
@@ -92,7 +98,9 @@ def build_state_space(model, observables, meas_err=None) -> StateSpaceModel:
     """Build a state-space model from a linearized equilibrium model."""
     linear_model = getattr(model, "linear_mod", None)
     if linear_model is None or linear_model.A_s is None or linear_model.B_s is None:
-        raise RuntimeError("Model must be linearized before building a state-space model.")
+        raise RuntimeError(
+            "Model must be linearized before building a state-space model."
+        )
 
     obs_names = list(observables)
     Z, b = _measurement_matrices(model, obs_names)
@@ -131,7 +139,9 @@ def log_likelihood_ssm(ssm, data, *, fixed_init=None) -> float:
         return -1e10
 
 
-def log_likelihood(model, data, *, observables, meas_err=None, fixed_init=None) -> float:
+def log_likelihood(
+    model, data, *, observables, meas_err=None, fixed_init=None
+) -> float:
     """Evaluate the Gaussian log-likelihood for observed model data."""
     try:
         y = np.asarray(data, dtype=float)

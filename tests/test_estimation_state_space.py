@@ -103,7 +103,9 @@ def test_decomposition_helpers_have_expected_shapes_and_identities():
         ]
     )
     meas_err = np.zeros((5, 2))
-    y, states = ssm.simulate(x_1=np.array([0.2, -0.1]), shocks=shocks, meas_err=meas_err)
+    y, states = ssm.simulate(
+        x_1=np.array([0.2, -0.1]), shocks=shocks, meas_err=meas_err
+    )
 
     shock_components, det_component = ssm.decompose_by_shock(shocks, states)
     np.testing.assert_allclose(shock_components.sum(axis=0) + det_component, states)

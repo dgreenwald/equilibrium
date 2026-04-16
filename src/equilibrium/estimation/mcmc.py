@@ -884,7 +884,9 @@ class MonteCarlo:
         is written by ``estimation.io.save_estimation`` (Step 7).
         """
         if self.out_dir is None:
-            raise ValueError("Cannot save: model_label and estimation_label must be set.")
+            raise ValueError(
+                "Cannot save: model_label and estimation_label must be set."
+            )
 
         self.out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -906,7 +908,9 @@ class MonteCarlo:
     def load_metadata(self):
         """Load mode and Hessian arrays from the output directory."""
         if self.out_dir is None:
-            raise ValueError("Cannot load: model_label and estimation_label must be set.")
+            raise ValueError(
+                "Cannot load: model_label and estimation_label must be set."
+            )
 
         mode_path = self.out_dir / "mode.npz"
         if mode_path.exists():
@@ -1110,7 +1114,9 @@ class RWMC(MonteCarlo):
             Accepted but unused (for API flexibility).
         """
         if (n_save is not None) and (self.out_dir is None):
-            raise ValueError("RWMC.sample requires model_label/estimation_label when n_save is set.")
+            raise ValueError(
+                "RWMC.sample requires model_label/estimation_label when n_save is set."
+            )
 
         self.Nsim = Nsim
 
@@ -1252,7 +1258,9 @@ class RWMC(MonteCarlo):
             Chain index.  Default is ``0``.
         """
         if self.out_dir is None:
-            raise ValueError("Cannot save: model_label and estimation_label must be set.")
+            raise ValueError(
+                "Cannot save: model_label and estimation_label must be set."
+            )
 
         self.out_dir.mkdir(parents=True, exist_ok=True)
         np.savez(
@@ -1276,7 +1284,9 @@ class RWMC(MonteCarlo):
             Chain index.  Default is ``0``.
         """
         if self.out_dir is None:
-            raise ValueError("Cannot load: model_label and estimation_label must be set.")
+            raise ValueError(
+                "Cannot load: model_label and estimation_label must be set."
+            )
 
         path = self.out_dir / f"chain{chain_no}.npz"
         data = np.load(path)

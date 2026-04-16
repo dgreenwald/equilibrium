@@ -17,7 +17,6 @@ from equilibrium.estimation.mcmc import (
 )
 from equilibrium.estimation.prior import Prior
 
-
 # ---------------------------------------------------------------------------
 # Module-level utilities
 # ---------------------------------------------------------------------------
@@ -70,7 +69,9 @@ def test_check_bounds_pass_and_fail():
 
 
 def test_metropolis_step_force_reject():
-    f = lambda z: -np.sum(z * z)
+    def f(z):
+        return -np.sum(z * z)
+
     x = np.array([0.0])
     x_try = np.array([1.0])
     x_new, post_new, acc = metropolis_step(f, x, x_try, post=f(x), log_u=0.0)
@@ -79,7 +80,9 @@ def test_metropolis_step_force_reject():
 
 
 def test_metropolis_step_force_accept():
-    f = lambda z: -np.sum(z * z)
+    def f(z):
+        return -np.sum(z * z)
+
     x = np.array([0.0])
     x_try = np.array([1.0])
     x_new, post_new, acc = metropolis_step(f, x, x_try, post=f(x), log_u=-100.0)
@@ -90,7 +93,9 @@ def test_metropolis_step_force_accept():
 def test_importance_sample_shapes():
     from scipy.stats import multivariate_normal as mv
 
-    f = lambda z: -0.5 * np.sum(z * z)
+    def f(z):
+        return -0.5 * np.sum(z * z)
+
     dist = mv(mean=np.zeros(2), cov=np.eye(2))
 
     draws, lw = importance_sample(f, dist, Nsim=1, Nx=2)
@@ -103,7 +108,9 @@ def test_importance_sample_shapes():
 
 
 def test_rwmh_smoke():
-    post = lambda z: -0.5 * np.sum(z * z)
+    def post(z):
+        return -0.5 * np.sum(z * z)
+
     x_store, p_store, acc = rwmh(post, np.array([0.0]), Nstep=4)
     assert x_store.shape == (4, 1)
     assert p_store.shape == (4,)
@@ -111,7 +118,9 @@ def test_rwmh_smoke():
 
 
 def test_rwmh_two_blocks():
-    post = lambda z: -0.5 * np.sum(z * z)
+    def post(z):
+        return -0.5 * np.sum(z * z)
+
     x0 = np.zeros(4)
     blocks = randomize_blocks(4, 2)
     x_store, p_store, acc = rwmh(post, x0, blocks=blocks, Nstep=6)
@@ -334,7 +343,9 @@ def test_rwmc_n_retune_runs(tmp_path):
 def test_rwmc_merge_chains():
     prior = Prior()
     prior.add("norm", mean=0.0, sd=1.0)
-    log_like = lambda x: -0.5 * np.sum(x * x)
+
+    def log_like(x):
+        return -0.5 * np.sum(x * x)
 
     chain_a = RWMC(log_like=log_like, prior=prior, Nx=1)
     chain_a.draws = np.ones((5, 1))

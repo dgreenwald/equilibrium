@@ -1,14 +1,15 @@
 """Tests for estimation/numerical.py vendored helpers."""
 
 import numpy as np
-import pytest
 
 from equilibrium.estimation import numerical as nm
 
 
 def test_hessian_quadratic():
     # f(x, y) = x^2 + 2*y^2 → H = diag(2, 4)
-    f = lambda x: x[0] ** 2 + 2.0 * x[1] ** 2
+    def f(x):
+        return x[0] ** 2 + 2.0 * x[1] ** 2
+
     H = nm.hessian(f, np.array([1.0, 1.0]))
     expected = np.diag([2.0, 4.0])
     np.testing.assert_allclose(H, expected, atol=1e-6)
@@ -16,7 +17,9 @@ def test_hessian_quadratic():
 
 def test_hessian_cross_term():
     # f(x, y) = x*y → H = [[0, 1], [1, 0]]
-    f = lambda x: x[0] * x[1]
+    def f(x):
+        return x[0] * x[1]
+
     H = nm.hessian(f, np.array([1.0, 2.0]))
     expected = np.array([[0.0, 1.0], [1.0, 0.0]])
     np.testing.assert_allclose(H, expected, atol=1e-6)

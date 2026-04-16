@@ -119,7 +119,9 @@ def _build_prior_and_arrays(model: Model, params_to_estimate: list[EstimParam]):
     )
 
 
-def _split_sample_kwargs(sample_kwargs: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+def _split_sample_kwargs(
+    sample_kwargs: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
     init_keys = {
         "jump_scale",
         "jump_mult",
@@ -184,7 +186,8 @@ def estimate(
     def log_like(x):
         try:
             param_updates = {
-                param.name: float(x[idx]) for idx, param in enumerate(params_to_estimate)
+                param.name: float(x[idx])
+                for idx, param in enumerate(params_to_estimate)
             }
             this_model = model.update_copy(params=param_updates)
             this_model.solve_steady(calibrate=False, display=False)
@@ -244,10 +247,14 @@ def estimate(
             model_label=model.label,
             estimation_label=estimation_label,
         )
-        chain.x_mode = None if master.x_mode is None else np.array(master.x_mode, copy=True)
+        chain.x_mode = (
+            None if master.x_mode is None else np.array(master.x_mode, copy=True)
+        )
         chain.post_mode = master.post_mode
         chain.H = None if master.H is None else np.array(master.H, copy=True)
-        chain.H_inv = None if master.H_inv is None else np.array(master.H_inv, copy=True)
+        chain.H_inv = (
+            None if master.H_inv is None else np.array(master.H_inv, copy=True)
+        )
         chain.CH_inv = np.array(master.CH_inv, copy=True)
 
         chain.initialize(x0=x0.copy(), **init_kwargs)
