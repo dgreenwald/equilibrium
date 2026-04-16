@@ -56,6 +56,7 @@ class EstimationResult:
     model_label: str
     estimation_label: str
     observables: list[str]
+    estim_params: list[EstimParam]
     param_names: list[str]
     x0: np.ndarray
     mode: np.ndarray | None
@@ -262,10 +263,11 @@ def estimate(
         "fixed_init": fixed_init,
     }
 
-    return EstimationResult(
+    result = EstimationResult(
         model_label=model.label,
         estimation_label=estimation_label,
         observables=list(observables),
+        estim_params=[EstimParam(**param.__dict__) for param in params_to_estimate],
         param_names=names,
         x0=x0,
         mode=None if master.x_mode is None else np.array(master.x_mode, copy=True),
@@ -276,3 +278,7 @@ def estimate(
         chains=chains,
         metadata=metadata,
     )
+    from .io import save_estimation
+
+    save_estimation(result, overwrite=True)
+    return result

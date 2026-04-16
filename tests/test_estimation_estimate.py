@@ -4,7 +4,12 @@ import numpy as np
 import pytest
 
 from equilibrium import Model
-from equilibrium.estimation import EstimParam, build_state_space, estimate
+from equilibrium.estimation import (
+    EstimParam,
+    build_state_space,
+    estimate,
+    load_estimation,
+)
 from equilibrium.settings import get_settings
 
 
@@ -132,6 +137,15 @@ def test_estimate_smoke_single_chain(tmp_path):
         assert len(result.chains) == 1
         assert result.chains[0].draws.shape == (8, 1)
         assert np.all(np.isfinite(result.chains[0].post_sim))
-        assert (tmp_path / "estimation" / mod.label / "smoke_run" / "chain0.npz").exists()
+        out_dir = tmp_path / "estimation" / mod.label / "smoke_run"
+        assert (out_dir / "chain0.npz").exists()
+        assert (out_dir / "config.json").exists()
+
+        loaded = load_estimation(mod.label, "smoke_run")
+        assert loaded.param_names == ["bet"]
+        assert [param.name for param in loaded.estim_params] == ["bet"]
+        assert loaded.observables == observables
+        assert len(loaded.chains) == 1
+        np.testing.assert_allclose(loaded.chains[0].draws, result.chains[0].draws)
     finally:
         settings.paths.save_dir = old_save_dir
