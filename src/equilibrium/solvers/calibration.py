@@ -1415,6 +1415,9 @@ def _solve_scalar_root(
         )
 
 
+_ROOT_MAXFEV_METHODS = {"hybr", "lm"}
+
+
 def _solve_vector_root(
     func: Callable,
     x0: np.ndarray,
@@ -1426,13 +1429,16 @@ def _solve_vector_root(
     if method is None:
         method = "hybr"  # Hybrid Powell method
 
+    # hybr and lm are MINPACK wrappers that use maxfev, not maxiter
+    iter_key = "maxfev" if method in _ROOT_MAXFEV_METHODS else "maxiter"
+
     try:
         sol = opt.root(
             func,
             x0,
             method=method,
             tol=tol,
-            options={"maxiter": maxiter},
+            options={iter_key: maxiter},
         )
 
         # Build parameter dict

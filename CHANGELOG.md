@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-04-16
+
+### Added
+- **Bayesian MCMC Estimation** (`equilibrium.estimation` subpackage): Full posterior estimation pipeline for DSGE models
+  - `Prior`: Flexible prior distribution specification (Beta, Gamma, Normal, Uniform, etc.)
+  - `RWMC`: Random Walk Metropolis-Hastings sampler with adaptive jump scaling, parameter blocking, mode-finding, and Hessian-based proposal covariance
+  - `StateSpaceModel` / `build_state_space()`: Assembles the Kalman-filter state-space representation from a linearized model and a list of observable variable names
+  - `log_likelihood()` / `log_likelihood_ssm()`: Gaussian log-likelihood evaluation via the Kalman filter
+  - `EstimParam`: Typed specification for an estimated parameter (prior, bounds, initial value)
+  - `estimate()`: High-level entry point — validates inputs, finds the posterior mode, computes the Hessian-based proposal, runs `n_chains` MCMC chains, and saves results
+  - `EstimationResult`: Container for mode, Hessian, chains, and metadata
+  - `load_estimation()`: Reload a saved estimation from disk
+- **`RunItem`**: New `RunItem` dataclass for bundling a model specification with experiment specifications, used to group multi-spec runs
+- **`PathResult.to_dataframe()`**: Convert simulation path results to a pandas DataFrame (requires `pandas` optional dependency)
+- **Linear sequence save/load**: `solve_sequence_linear()` now saves results by default; `load_linear_sequence_result()` loads from the `sequences_linear/` subdirectory; `plot_deterministic_results()` supports `result_kind="linear_sequence"` for label-based loading
+- **Derived parameters**: `Model` supports derived parameter definitions that are computed from other parameters
+- **`initial_guess_from_label`** parameter on `solve_steady()` to seed the solver from a previously saved steady state
+- **Secant method** support in calibration scalar solvers
+- **Warm start** option for calibration to initialize from a prior solution
+- **`calibrate_initial`** argument in calibration to control whether the initial parameter vector is used as a starting point
+- **`hlines` / `vlines`** options in `plot_paths()` for adding horizontal and vertical reference lines
+- **Plot group style controls**: `style_level` parameter and fallback resolution for plot group styles
+- **`result_kind`** included in auto-generated plot subdirectory names to avoid collisions between result types
+- **`write_latex_property_list()`** promoted to public API
+- **`.env` file discovery** now walks parent directories, so projects do not need `.env` at the exact working directory
+
+### Changed
+- Plotting code reorganized: path preparation split into `plot/preparation.py` for reuse outside the main plot functions
+- `debt_block` updated to support detrending
+- MCMC estimation performance: Kalman filter inner loop, numerical helpers (`robust_cholesky`, `bound_transform`), and MCMC proposal step all optimized
+
+### Fixed
+- **`opt.root` with `hybr`/`lm` methods** was passing `maxiter` instead of `maxfev` to MINPACK, causing `OptimizeWarning` on every vector root calibration call
+- Multi-regime exogenous state handoff now correctly preserves shock persistence across regime boundaries
+- `log_transform` was incorrectly wrapping optimality and calibration rule RHS expressions
+- Calibration bounds enforcement and spurious convergence detection improved
+- Custom y-limits (`ylims`) in plotting now applied correctly
+- `hlines`/`vlines` ordering in `plot_paths()` fixed
+
 ## [0.2.0] - 2026-02-07
 
 ### Added
