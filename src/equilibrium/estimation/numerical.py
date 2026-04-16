@@ -4,9 +4,8 @@ These four functions are inlined from py_tools to avoid an external dependency.
 All are pure NumPy.
 """
 
-import itertools
-
 import numpy as np
+import scipy.linalg as sla
 
 
 def hessian(f, x_in, eps=1e-4):
@@ -26,35 +25,38 @@ def hessian(f, x_in, eps=1e-4):
     numpy.ndarray
         Symmetric Hessian matrix of shape ``(n, n)``.
     """
-    x = x_in.copy()
+    x = np.array(x_in, dtype=float, copy=True)
     n = len(x)
-    H = np.zeros((n, n))
-    for ii, jj in itertools.product(range(n), repeat=2):
-        if ii <= jj:
+    H = np.empty((n, n))
+    inv_4eps2 = 1.0 / (4.0 * eps * eps)
+
+    for ii in range(n):
+        for jj in range(ii, n):
             x[ii] += eps
             x[jj] += eps
-            H[ii, jj] += f(x)
+            val = f(x)
 
             x[jj] -= 2.0 * eps
             if ii != jj:
-                H[ii, jj] -= f(x)
+                val -= f(x)
             else:
-                H[ii, jj] -= 2.0 * f(x)
+                val -= 2.0 * f(x)
 
             x[ii] -= 2.0 * eps
-            H[ii, jj] += f(x)
+            val += f(x)
 
             x[jj] += 2.0 * eps
             if ii != jj:
-                H[ii, jj] -= f(x)
+                val -= f(x)
 
             x[ii] += eps
             x[jj] -= eps
 
-        else:
-            H[ii, jj] = H[jj, ii]
+            val *= inv_4eps2
+            H[ii, jj] = val
+            H[jj, ii] = val
 
-    return H / (4.0 * (eps**2))
+    return H
 
 
 def _logit(x, lb=0.0, ub=1.0):
@@ -121,6 +123,9 @@ def robust_cholesky(A, min_eig=1e-12):
     ``min_eig`` before constructing the square-root factor, so the result
     is well-defined even when *A* is only positive semi-definite.
 
+    Uses ``scipy.linalg.eigh`` which exploits symmetry for ~2× speed
+    and guarantees real eigenvalues.
+
     Parameters
     ----------
     A : numpy.ndarray
@@ -134,10 +139,10 @@ def robust_cholesky(A, min_eig=1e-12):
         Matrix ``L`` of shape ``(n, n)`` such that ``L @ L.T`` is a
         positive semi-definite approximation to *A*.
     """
-    vals, vecs = np.linalg.eig(A)
-    vals = np.maximum(vals, min_eig)
-    Dhalf = np.diag(np.sqrt(vals))
-    return vecs @ Dhalf
+    vals, vecs = sla.eigh(A)
+    np.maximum(vals, min_eig, out=vals)
+    np.sqrt(vals, out=vals)
+    return vecs * vals[np.newaxis, :]
 
 
 def rsolve(b, A):
@@ -157,4 +162,4 @@ def rsolve(b, A):
     numpy.ndarray
         Solution array of shape ``(m, n)``.
     """
-    return np.linalg.solve(A.T, b.T).T
+    return sla.solve(A.T, b.T).T

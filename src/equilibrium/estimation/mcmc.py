@@ -16,6 +16,7 @@ IO changes vs. original:
   ``save_item`` / ``load_item`` are removed.
 """
 
+import math
 from pathlib import Path
 
 import numpy as np
@@ -60,7 +61,7 @@ def adapt_jump_scale(acc_rate, adapt_sens, adapt_target, adapt_range):
     float
         Multiplicative scaling factor to apply to the jump scale.
     """
-    e_term = np.exp(adapt_sens * (acc_rate - adapt_target))
+    e_term = math.exp(adapt_sens * (acc_rate - adapt_target))
     return (1.0 - 0.5 * adapt_range) + adapt_range * (e_term / (1.0 + e_term))
 
 
@@ -217,7 +218,7 @@ def metropolis_step(fcn, x, x_try, post=None, log_u=None, args=()):
     post_try = fcn(x_try, *args)
 
     if log_u is None:
-        log_u = np.log(np.random.rand())
+        log_u = math.log(np.random.rand())
 
     if log_u < post_try - post:
         return (x_try, post_try, True)
@@ -347,7 +348,7 @@ def rwmh(
     for istep in range(Nstep):
         for iblock, block in enumerate(blocks):
             x_try = x.copy()
-            x_try[block] += jump_scale * np.dot(C_list[iblock], e[istep, block])
+            x_try[block] += jump_scale * (C_list[iblock] @ e[istep, block])
             x, post, acc = metropolis_step(
                 posterior, x, x_try, post=post, log_u=log_u[istep, iblock]
             )
@@ -1137,31 +1138,44 @@ class RWMC(MonteCarlo):
         e = [np.random.randn(Nstep, np.sum(block)) for block in self.blocks]
         log_u = np.log(np.random.rand(Nstep, self.Nblock))
 
-        self.max_x = 1.0 * x
-        self.max_post = 1.0 * post
+        self.max_x = x.copy()
+        self.max_post = post
 
         self.print_log("Jump scale is {}".format(self.jump_scale))
 
+        # Cache instance attributes as locals to avoid repeated lookups
+        # in the hot inner loop.
+        blocks = self.blocks
+        C_list = self.C_list
+        Nblock = self.Nblock
+        stride = self.stride
+        draws = self.draws
+        post_sim = self.post_sim
+        jump_scale = self.jump_scale
+
+        acc = 0
+
         for istep in range(Nstep):
-            for iblock, block in enumerate(self.blocks):
+            for iblock in range(Nblock):
+                block = blocks[iblock]
                 x_try = x.copy()
-                x_try[block] += self.jump_scale * np.dot(
-                    self.C_list[iblock], e[iblock][istep, :]
+                x_try[block] += jump_scale * (C_list[iblock] @ e[iblock][istep])
+                x, post, accepted = self.metro(
+                    x, post, x_try, log_u=log_u[istep, iblock]
                 )
-                x, post, acc = self.metro(x, post, x_try, log_u=log_u[istep, iblock])
 
                 if post > self.max_post:
-                    self.max_post = 1.0 * post
-                    self.max_x = 1.0 * x
+                    self.max_post = post
+                    self.max_x = x.copy()
 
-                self.acc += acc
+                acc += accepted
 
-            if (istep + 1) % self.stride == 0:
-                self.acc_rate = self.acc / ((istep + 1) * self.Nblock)
-                jstep = (istep + 1) // self.stride - 1
+            if (istep + 1) % stride == 0:
+                self.acc_rate = acc / ((istep + 1) * Nblock)
+                jstep = (istep + 1) // stride - 1
 
-                self.draws[jstep, :] = x
-                self.post_sim[jstep] = post
+                draws[jstep, :] = x
+                post_sim[jstep] = post
 
                 if n_print is not None:
                     if (jstep + 1) % n_print == 0:
@@ -1176,18 +1190,18 @@ class RWMC(MonteCarlo):
                         ((jstep + 1) - min_recov) % n_recov == 0
                     ):
                         self.print_log("Recomputing covariance")
-                        for iblock, block in enumerate(self.blocks):
+                        for iblock_r, block_r in enumerate(blocks):
                             sample_cov = np.cov(
-                                self.draws[: jstep + 1, block], rowvar=False
-                            ) + cov_offset * np.eye(np.sum(block))
-                            self.C_list[iblock] = np.linalg.cholesky(sample_cov)
+                                draws[: jstep + 1, block_r], rowvar=False
+                            ) + cov_offset * np.eye(np.sum(block_r))
+                            C_list[iblock_r] = np.linalg.cholesky(sample_cov)
 
                 if n_retune is not None:
                     if (jstep + 1) % n_retune == 0:
-                        acc_since_retune = self.acc - acc_last_retune
+                        acc_since_retune = acc - acc_last_retune
                         steps_since_retune = (istep + 1) - istep_last_retune
                         acc_rate_since_retune = acc_since_retune / (
-                            steps_since_retune * self.Nblock
+                            steps_since_retune * Nblock
                         )
 
                         self.print_log(
@@ -1204,11 +1218,12 @@ class RWMC(MonteCarlo):
                             self.adapt_target,
                             self.adapt_range,
                         )
+                        jump_scale = self.jump_scale
                         self.print_log(
                             "Retuning: new jump scale = {:7.6f}".format(self.jump_scale)
                         )
 
-                        acc_last_retune = self.acc
+                        acc_last_retune = acc
                         istep_last_retune = istep
 
                 if n_save is not None:
@@ -1216,7 +1231,8 @@ class RWMC(MonteCarlo):
                         self.print_log("Saving intermediate output")
                         self.save_chain(chain_no=chain_no)
 
-        self.acc_rate = self.acc / Ntot
+        self.acc = acc
+        self.acc_rate = acc / Ntot
 
         self.close_log()
 

@@ -6,9 +6,44 @@ and without the ``py_tools.stats`` dependency.
 
 import numpy as np
 import scipy as sp
-from scipy.stats import multivariate_normal as mvn
+import scipy.linalg as sla
 
 from . import numerical as nm
+
+
+_LOG_2PI = np.log(2.0 * np.pi)  # constant for multivariate normal log-pdf
+
+
+def _mvn_logpdf(err, F):
+    """Log-density of a zero-mean multivariate normal.
+
+    Uses a Cholesky factorisation of *F* to evaluate the log-density,
+    avoiding the overhead of ``scipy.stats.multivariate_normal`` (which
+    re-validates inputs and re-factorises on every call).
+
+    Parameters
+    ----------
+    err : ndarray of shape ``(n,)``
+        Innovation vector.
+    F : ndarray of shape ``(n, n)``
+        Innovation covariance (symmetric positive definite).
+
+    Returns
+    -------
+    float
+        Log probability density value.
+
+    Raises
+    ------
+    np.linalg.LinAlgError
+        If *F* is not positive definite.
+    """
+    n = len(err)
+    L = sla.cholesky(F, lower=True)
+    # Solve L @ z = err  →  z = L^{-1} err
+    z = sla.solve_triangular(L, err, lower=True)
+    log_det = 2.0 * np.sum(np.log(np.diag(L)))
+    return -0.5 * (n * _LOG_2PI + log_det + np.dot(z, z))
 
 
 def init_to_val(shape, val):
@@ -267,6 +302,7 @@ class StateSpaceEstimates:
         self.y = y
         self.Nt, self.Ny = self.y.shape
         self.ix = np.isfinite(self.y)
+        self._all_observed = np.all(self.ix)
 
     def set_ssm(self, ssm):
         """Assign a new state space model."""
@@ -295,49 +331,103 @@ class StateSpaceEstimates:
         x_pred_t = self.x_init
         P_pred_t = self.P_init
 
-        self.err = np.zeros((self.Nt, self.Ny))
-        self.x_pred = np.zeros((self.Nt, self.Nx))
-        self.P_pred = np.zeros((self.Nt, self.Nx, self.Nx))
-        self.ZFi = np.zeros((self.Nt, self.Nx, self.Ny))
-        self.K = np.zeros((self.Nt, self.Nx, self.Ny))
-        self.G = np.zeros((self.Nt, self.Nx, self.Nx))
-        self.log_like = 0.0
+        Nt = self.Nt
+        Nx = self.Nx
+        Ny = self.Ny
 
-        for tt in range(self.Nt):
-            self.x_pred[tt, :] = x_pred_t
-            self.P_pred[tt, :, :] = P_pred_t
+        self.err = np.zeros((Nt, Ny))
+        self.x_pred = np.zeros((Nt, Nx))
+        self.P_pred = np.zeros((Nt, Nx, Nx))
+        self.ZFi = np.zeros((Nt, Nx, Ny))
+        self.K = np.zeros((Nt, Nx, Ny))
+        self.G = np.zeros((Nt, Nx, Nx))
+        log_like = 0.0
 
-            ix_t = self.ix[tt, :]
-            Z_t = self.ssm.Z[ix_t, :]
-            err_t = y_til[tt, ix_t] - np.dot(Z_t, x_pred_t)
+        # Cache frequently accessed SSM matrices as local variables to
+        # avoid repeated attribute lookups inside the hot loop.
+        A = self.ssm.A
+        Z = self.ssm.Z
+        H = self.ssm.H
+        RQR = self.ssm.RQR
+        ix = self.ix
 
-            H_t = self.ssm.H[ix_t, :][:, ix_t]
-            PZ = np.dot(P_pred_t, Z_t.T)
-            F_t = np.dot(Z_t, PZ) + H_t
+        # Store references to result arrays for faster indexing.
+        x_pred_arr = self.x_pred
+        P_pred_arr = self.P_pred
+        err_arr = self.err
+        ZFi_arr = self.ZFi
+        K_arr = self.K
+        G_arr = self.G
 
-            if np.any(ix_t):
+        # Check if all observations are always present (common case).
+        all_observed = self._all_observed
+
+        if all_observed:
+            # Fast path: no missing data — avoid per-step boolean indexing.
+            for tt in range(Nt):
+                x_pred_arr[tt] = x_pred_t
+                P_pred_arr[tt] = P_pred_t
+
+                err_t = y_til[tt] - Z @ x_pred_t
+
+                PZ = P_pred_t @ Z.T
+                F_t = Z @ PZ + H
+
                 try:
-                    self.log_like += mvn.logpdf(
-                        err_t, mean=np.zeros(np.sum(ix_t)), cov=F_t
-                    )
-                except Exception:
+                    log_like += _mvn_logpdf(err_t, F_t)
+                except np.linalg.LinAlgError:
                     self.log_like = -1e10
                     return None
 
-            ZFi_t = nm.rsolve(Z_t.T, F_t)
-            AP_t = np.dot(self.ssm.A, P_pred_t)
-            K_t = np.dot(AP_t, ZFi_t)
-            G_t = self.ssm.A - np.dot(K_t, Z_t)
+                # ZFi_t = Z.T @ F_t^{-1}  via solving F_t @ X = Z.T
+                ZFi_t = sla.solve(F_t, Z, assume_a="pos").T
+                AP_t = A @ P_pred_t
+                K_t = AP_t @ ZFi_t
+                G_t = A - K_t @ Z
 
-            x_pred_t = np.dot(self.ssm.A, x_pred_t) + np.dot(K_t, err_t)
-            P_pred_t = np.dot(AP_t, G_t.T) + self.ssm.RQR
+                x_pred_t = A @ x_pred_t + K_t @ err_t
+                P_pred_t = AP_t @ G_t.T + RQR
 
-            self.ix[tt, :] = ix_t
-            self.err[tt, ix_t] = err_t
-            self.ZFi[tt, :, ix_t] = ZFi_t.T
-            self.K[tt, :, ix_t] = K_t.T
-            self.G[tt, :, :] = G_t
+                err_arr[tt] = err_t
+                ZFi_arr[tt] = ZFi_t
+                K_arr[tt] = K_t
+                G_arr[tt] = G_t
+        else:
+            # Slow path: handle missing observations per step.
+            for tt in range(Nt):
+                x_pred_arr[tt] = x_pred_t
+                P_pred_arr[tt] = P_pred_t
 
+                ix_t = ix[tt, :]
+                Z_t = Z[ix_t, :]
+                err_t = y_til[tt, ix_t] - Z_t @ x_pred_t
+
+                H_t = H[ix_t, :][:, ix_t]
+                PZ = P_pred_t @ Z_t.T
+                F_t = Z_t @ PZ + H_t
+
+                if np.any(ix_t):
+                    try:
+                        log_like += _mvn_logpdf(err_t, F_t)
+                    except np.linalg.LinAlgError:
+                        self.log_like = -1e10
+                        return None
+
+                ZFi_t = sla.solve(F_t, Z_t, assume_a="pos").T
+                AP_t = A @ P_pred_t
+                K_t = AP_t @ ZFi_t
+                G_t = A - K_t @ Z_t
+
+                x_pred_t = A @ x_pred_t + K_t @ err_t
+                P_pred_t = AP_t @ G_t.T + RQR
+
+                ix[tt, :] = ix_t
+                err_arr[tt, ix_t] = err_t
+                ZFi_arr[tt, :, ix_t] = ZFi_t.T
+                K_arr[tt, :, ix_t] = K_t.T
+                G_arr[tt] = G_t
+
+        self.log_like = log_like
         return None
 
     def disturbance_smoother(self):
