@@ -11,7 +11,7 @@ import scipy.linalg as sla
 from . import numerical as nm
 
 
-_LOG_2PI = np.log(2.0 * np.pi)
+_LOG_2PI = np.log(2.0 * np.pi)  # constant for multivariate normal log-pdf
 
 
 def _mvn_logpdf(err, F):
@@ -302,6 +302,7 @@ class StateSpaceEstimates:
         self.y = y
         self.Nt, self.Ny = self.y.shape
         self.ix = np.isfinite(self.y)
+        self._all_observed = np.all(self.ix)
 
     def set_ssm(self, ssm):
         """Assign a new state space model."""
@@ -359,7 +360,7 @@ class StateSpaceEstimates:
         G_arr = self.G
 
         # Check if all observations are always present (common case).
-        all_observed = np.all(ix)
+        all_observed = self._all_observed
 
         if all_observed:
             # Fast path: no missing data — avoid per-step boolean indexing.
