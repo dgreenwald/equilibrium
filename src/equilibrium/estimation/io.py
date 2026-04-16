@@ -11,7 +11,7 @@ import numpy as np
 
 from ..settings import get_settings
 from .estimate import EstimationResult, EstimParam
-from .mcmc import RWMC
+from .mcmc import RWMC, _load_scalar
 
 
 def estimation_dir(model_label, estimation_label) -> Path:
@@ -96,7 +96,7 @@ def load_estimation(model_label, estimation_label) -> EstimationResult:
     if mode_path.exists():
         data = np.load(mode_path)
         mode = data["x_mode"]
-        post_mode = float(data["post_mode"][0])
+        post_mode = _load_scalar(data["post_mode"], "post_mode")
 
     H = None
     H_inv = None

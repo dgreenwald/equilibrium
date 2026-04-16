@@ -16,9 +16,6 @@ IO changes vs. original:
   ``save_item`` / ``load_item`` are removed.
 """
 
-import json
-import time
-from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -28,10 +25,17 @@ from scipy.stats import multivariate_normal as mv
 from . import numerical as nm
 from .prior import Prior
 
-
 # ---------------------------------------------------------------------------
 # Module-level utilities
 # ---------------------------------------------------------------------------
+
+
+def _load_scalar(value, name):
+    """Return a Python scalar from a saved NumPy value."""
+    value = np.asarray(value)
+    if value.size != 1:
+        raise ValueError(f"Expected scalar value for {name}, got shape {value.shape}.")
+    return value.item()
 
 
 def adapt_jump_scale(acc_rate, adapt_sens, adapt_target, adapt_range):
@@ -907,7 +911,7 @@ class MonteCarlo:
         if mode_path.exists():
             data = np.load(mode_path)
             self.x_mode = data["x_mode"]
-            self.post_mode = float(data["post_mode"])
+            self.post_mode = _load_scalar(data["post_mode"], "post_mode")
 
         hess_path = self.out_dir / "hessian.npz"
         if hess_path.exists():
@@ -1262,8 +1266,8 @@ class RWMC(MonteCarlo):
         data = np.load(path)
         self.draws = data["draws"]
         self.post_sim = data["post_sim"]
-        self.acc_rate = float(data["acc_rate"])
-        self.jump_scale = float(data["jump_scale"])
+        self.acc_rate = _load_scalar(data["acc_rate"], "acc_rate")
+        self.jump_scale = _load_scalar(data["jump_scale"], "jump_scale")
 
     def load_chains(self, chains):
         """Load multiple chains and store them in list attributes.

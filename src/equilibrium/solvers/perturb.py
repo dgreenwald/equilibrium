@@ -75,7 +75,7 @@ def solve_klein(A, B, C, Phi, n_pre):
     # Generalized Schur decomposition, sorted by outside unit circle
     S, T, alp, bet, Q, Z = ordqz(A, B, sort="ouc", output="complex")
 
-    Qstar = np.asmatrix(Q).H
+    Qstar = Q.conj().T
     Q1 = Qstar[:n_pre, :]
     Q2 = Qstar[n_pre:, :]
 
