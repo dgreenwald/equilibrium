@@ -21,7 +21,17 @@ class MyOrderedDict(OrderedDict):
 
     def __add__(self, other):
         temp = self.copy()
-        temp.update(OrderedDict(other))
+        incoming = OrderedDict(other)
+        duplicates = [k for k in incoming if k in temp]
+        if duplicates:
+            dup_str = ", ".join(f"'{k}'" for k in duplicates)
+            raise ValueError(
+                f"Duplicate rule key(s) detected: {dup_str}. "
+                "Each variable may only have one rule per category. "
+                "To intentionally replace a rule, assign directly: "
+                "model.rules['category']['var_name'] = 'new_expression'"
+            )
+        temp.update(incoming)
         return MyOrderedDict(temp)
 
     def __radd__(self, other):

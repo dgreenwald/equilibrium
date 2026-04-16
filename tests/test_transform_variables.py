@@ -273,10 +273,12 @@ def test_transform_in_optimality_rules():
     # Check that x was transformed in optimality rule
     assert "log_x" in mod.rules["optimality"]
     opt_rule = mod.rules["optimality"]["log_x"]
-    # The RHS should have been transformed
-    assert "np.log" in opt_rule
-    # And references to x should use inverse transform
+    # References to x on the RHS should use the inverse transform
     assert "np.exp(log_x)" in opt_rule
+    # Optimality rules are residuals (driven to zero), so the transform
+    # function (np.log) is NOT applied as a wrapper — that would change
+    # the zero-crossing incorrectly.
+    assert "np.log" not in opt_rule
 
 
 def test_transform_with_analytical_steady():

@@ -234,12 +234,26 @@ class TestCalibrationScalarJustIdentified:
         """Test scalar parameter calibration using deterministic solver."""
         base_model = create_simple_model()
 
+        # Compute a reference path with a known shock so the target is
+        # guaranteed achievable (avoids hardcoding a value that may not be
+        # reachable with the allowed positive-shock bounds).
+        ref_shock_val = 0.05
+        ref_spec = DetSpec(Nt=50)
+        ref_spec.update_n_regimes(1)
+        ref_spec.add_shock(0, "Z_til", shock_per=0, shock_val=ref_shock_val)
+        z_path = ref_spec.build_exog_paths(base_model, Nt=50)
+
+        from equilibrium.solvers import deterministic as det_solver
+
+        ref_result = det_solver.solve(base_model, z_path)
+        I_idx = ref_result.var_names.index("I")
+        target_value = ref_result.UX[10, I_idx]
+
         calib_params = [
             ShockParam("Z_til", initial=0.01, bounds=(0.0, 0.1), regime=0, period=0)
         ]
 
-        # Target: investment (I) at time 10
-        targets = [PointTarget(variable="I", time=10, value=0.55)]
+        targets = [PointTarget(variable="I", time=10, value=target_value)]
 
         # Calibrate
         result = calibrate(

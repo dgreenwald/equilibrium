@@ -190,7 +190,14 @@ class RuleProcessor:
         """
         rules_steady = rules.copy()
         if calibrate:
-            rules_steady["optimality"] += rules_steady["calibration"]
+            # Calibration rules intentionally replace matching optimality conditions
+            # (e.g. a calibration equation for 'bet' replaces the FOC for 'bet').
+            # Build a new dict to avoid in-place mutation of the shallow-copied
+            # original rules (rules_steady is a shallow copy).
+            merged = MyOrderedDict(rules_steady["optimality"])
+            for key, val in rules_steady["calibration"].items():
+                merged[key] = val
+            rules_steady["optimality"] = merged
         if rules_steady["analytical_steady"]:
             for name in ["transition", "optimality"]:
                 rules_steady[name] = MyOrderedDict(

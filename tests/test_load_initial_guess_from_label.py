@@ -93,7 +93,7 @@ def test_load_initial_guess_from_alternative_label():
 
         # Step 2: Create alternative model with different calibration target
         alt_model = create_test_model(label=alt_label)
-        alt_model.rules["calibration"] += [("bet", "K - 8.0")]  # Different target
+        alt_model.rules["calibration"]["bet"] = "K - 8.0"  # Replace existing target
         alt_model.finalize()
         alt_model.solve_steady(calibrate=True, save=True, display=False)
         alt_bet = alt_model.params["bet"]
