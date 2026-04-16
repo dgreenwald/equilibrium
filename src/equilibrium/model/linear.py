@@ -45,6 +45,8 @@ class LinearModel:
         self.G_z = None
         self.H_x = None
         self.H_z = None
+        self.K = None
+        self.L = None
         self.Phi = Phi
         self.impact_matrix = impact_matrix
         self.irfs = None
@@ -106,6 +108,8 @@ class LinearModel:
         L_E = m.derivatives["expectations_variables"]["E"]
 
         L = L_s + L_E @ K
+        self.K = K
+        self.L = L
 
         # Combine
         JKL = np.vstack((J, K, L))
@@ -436,6 +440,8 @@ class LinearModel:
             "G_z": self.G_z,
             "H_x": self.H_x,
             "H_z": self.H_z,
+            "K": self.K,
+            "L": self.L,
             "Phi": self.Phi,
             "impact_matrix": self.impact_matrix,
         }

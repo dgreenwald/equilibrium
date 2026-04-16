@@ -48,7 +48,7 @@ def _measurement_matrices(model, observables):
 
     offsets = {"u": 0, "x": n_u, "z": n_u + n_x}
     category_map = {}
-    for category in ["u", "x", "z", "intermediate"]:
+    for category in ["u", "x", "z", "intermediate", "read_expectations"]:
         for name in model.var_lists.get(category, []):
             category_map[name] = category
 
@@ -58,7 +58,7 @@ def _measurement_matrices(model, observables):
         if name not in category_map:
             raise ValueError(
                 f"Observable '{name}' must be an existing model variable in "
-                "'u', 'x', 'z', or 'intermediate'."
+                "'u', 'x', 'z', 'intermediate', or 'read_expectations'."
             )
 
         category = category_map[name]
@@ -66,7 +66,7 @@ def _measurement_matrices(model, observables):
         if category in offsets:
             idx = model.var_lists[category].index(name)
             row[offsets[category] + idx] = 1.0
-        else:
+        elif category == "intermediate":
             idx = model.var_lists["intermediate"].index(name)
             row = np.hstack(
                 [
@@ -74,6 +74,13 @@ def _measurement_matrices(model, observables):
                     for var in ["u", "x", "z"]
                 ]
             )
+        else:
+            if linear_model.L is None:
+                raise RuntimeError(
+                    "Linear model does not expose the read_expectations mapping."
+                )
+            idx = model.var_lists["read_expectations"].index(name)
+            row = np.asarray(linear_model.L[idx, :], dtype=float)
 
         Z_rows.append(row)
         b.append(float(model.steady_dict[name]))

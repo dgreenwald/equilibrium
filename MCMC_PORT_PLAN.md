@@ -84,6 +84,7 @@ Growth rates and differences still work by expanding the state — e.g., add `lo
   - `x`
   - `z`
   - `intermediate`
+  - `read_expectations`
 
 ### 5b. Assemble `Z` and `b` from existing model variables
 
@@ -93,6 +94,11 @@ Construct the measurement system directly from the existing linearized model plu
 - For observables in `intermediate`, use the corresponding row of the existing intermediate Jacobian:
 ```python
 Z_i = np.hstack((J_inter_u[i], J_inter_x[i], J_inter_z[i]))
+```
+- For observables in `read_expectations`, use the corresponding row of the existing linear mapping
+  from `[u, x, z]` to `read_expectations` values:
+```python
+Z_i = linear_model.L[i]
 ```
 - Set:
 ```python

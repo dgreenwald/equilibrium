@@ -37,6 +37,9 @@ def _make_observable_rbc_model():
     mod.rules["expectations"] += [
         ("E_Om_K", "bet * (uc_NEXT / uc) * (fk_NEXT + (1.0 - delta))"),
     ]
+    mod.rules["read_expectations"] += [
+        ("exp_return_gap", "E_Om_K - 1.0"),
+    ]
     mod.rules["transition"] += [
         ("log_K", "np.log(K_new)"),
     ]
@@ -53,12 +56,12 @@ def _make_observable_rbc_model():
 
 def test_build_state_space_selects_existing_model_variables():
     mod, linear_model = _make_observable_rbc_model()
-    observables = ["y", "I", "Z_til", "R_ann"]
+    observables = ["y", "I", "Z_til", "R_ann", "exp_return_gap"]
 
     ssm = build_state_space(mod, observables=observables)
     assert ssm.A.shape == linear_model.A_s.shape
     assert ssm.R.shape == linear_model.B_s.shape
-    assert ssm.Z.shape == (4, mod.N["u"] + mod.N["x"] + mod.N["z"])
+    assert ssm.Z.shape == (5, mod.N["u"] + mod.N["x"] + mod.N["z"])
     np.testing.assert_allclose(ssm.b, [mod.steady_dict[name] for name in observables])
 
     np.testing.assert_allclose(ssm.Z[1], np.array([1.0, 0.0, 0.0]))
@@ -67,6 +70,10 @@ def test_build_state_space_selects_existing_model_variables():
     expected_z_row = np.zeros(ssm.Z.shape[1])
     expected_z_row[z_col] = 1.0
     np.testing.assert_allclose(ssm.Z[2], expected_z_row)
+    np.testing.assert_allclose(
+        ssm.Z[4],
+        np.asarray(linear_model.L[mod.var_lists["read_expectations"].index("exp_return_gap")]),
+    )
 
 
 def test_build_state_space_and_log_likelihood():
