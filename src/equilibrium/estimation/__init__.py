@@ -1,5 +1,8 @@
 # estimation sub-package — public API assembled here as sub-modules are completed.
 from . import numerical as numerical
+from .likelihood import build_state_space as build_state_space
+from .likelihood import log_likelihood as log_likelihood
+from .likelihood import log_likelihood_ssm as log_likelihood_ssm
 from .mcmc import RWMC as RWMC
 from .prior import Prior as Prior
 from .prior import get_prior as get_prior
@@ -18,7 +21,10 @@ __all__ = [
     "RWMC",
     "StateSpaceEstimates",
     "StateSpaceModel",
+    "build_state_space",
     "get_prior",
     "init_to_val",
+    "log_likelihood",
+    "log_likelihood_ssm",
     "numerical",
 ]

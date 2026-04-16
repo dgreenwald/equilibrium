@@ -51,49 +51,99 @@ Copy `StateSpaceModel` + `StateSpaceEstimates` to `estimation/state_space.py`. R
 
 Keep every method (`kalman_filter`, `disturbance_smoother`, `state_smoother`, `shock_smoother`, decompositions, `draw_states`) so smoothing is available later.
 
-## Step 5 — Add `observable` rule category, bridge to `StateSpaceModel`
+## Step 5 — Estimation-level observable selection, bridge to `StateSpaceModel`
 
-Observables are declared symbolically on the model and linearized the same way intermediates are. The user writes observable rules (arbitrary functions of core state and intermediates), and `Z` / `b` fall out of the existing autodiff pipeline — no hand-rolled mapping.
+Observables are **not** a separate model rule category. Instead, the model defines ordinary variables in the existing rule system (`u`, `x`, `z`, `intermediate`), and the estimation layer selects which of those variables are observed in a given dataset.
 
-### 5a. Add `observable` as a first-class rule category
-
-- Add `"observable"` to `RULE_KEYS` and `UNIQUE_RULE_KEYS` in `model/constants.py`.
-- Register `"observables": ["u", "x", "z", "params"]` in `Model.arg_lists` so codegen emits `self.observables(u, x, z, params)` and builds a `FunctionBundle` with Jacobians — mirroring the existing `intermediates` pipeline.
-- Observable rules can reference intermediates directly; dependency resolution in `RuleProcessor` already handles this.
-- After `solve_steady`, compute and cache `obs_ss = self.observables(u_ss, x_ss, z_ss, params_arr)`.
+This keeps the model reusable across multiple datasets and measurement systems:
+- the model defines what quantities exist,
+- the estimation specifies which of those quantities are observed,
+- transformed measurement objects (annualized rates, spreads, growth rates, etc.) should be defined as ordinary model variables, typically in `intermediate`.
 
 Example user code:
 ```python
-model.rules['observable'] += [
-    ('gdp_growth', 'log_Y - log_Y_lag'),
-    ('inflation', 'pi'),
-    ('fed_funds', '400 * log(R)'),
+model.rules["intermediate"] += [
+    ("fed_funds_ann", "400 * np.log(R)"),
+    ("gdp_growth", "log_Y - log_Y_lag"),
 ]
+
+observables = ["gdp_growth", "pi", "fed_funds_ann"]
 ```
 
-Growth rates and differences work by expanding the state — e.g., add `log_Y_lag` as an `x` variable with transition `log_Y_lag_new = log_Y`. No special lag mechanism needed.
+Growth rates and differences still work by expanding the state — e.g., add `log_Y_lag` as an `x` variable with transition `log_Y_lag_new = log_Y`. No special lag mechanism is needed.
 
-### 5b. Expose `Z` and `b` from `LinearModel`
+### 5a. Accept `observables=[...]` at the estimation / likelihood layer
 
-Extend `LinearModel.linearize()` to compute, when observable rules exist:
+- Do **not** add `"observable"` to `RULE_KEYS` or `UNIQUE_RULE_KEYS`.
+- Do **not** add a new codegen/function-bundle path for observables.
+- Add an estimation-level selector:
+  - `build_state_space(model, observables, meas_err=None)`
+  - `log_likelihood(model, data, *, observables, meas_err=None, fixed_init=None)`
+- Require each observable name to already exist after `finalize()`, typically in one of:
+  - `u`
+  - `x`
+  - `z`
+  - `intermediate`
+
+### 5b. Assemble `Z` and `b` from existing model variables
+
+Construct the measurement system directly from the existing linearized model plus steady-state values:
+
+- For observables in `u`, `x`, or `z`, use a basis row selecting that variable from the state vector `[u, x, z]`.
+- For observables in `intermediate`, use the corresponding row of the existing intermediate Jacobian:
 ```python
-Z = np.hstack((J_obs_u, J_obs_x, J_obs_z))   # shape (N_obs, N_u + N_x + N_z)
-b = obs_ss                                    # shape (N_obs,)
+Z_i = np.hstack((J_inter_u[i], J_inter_x[i], J_inter_z[i]))
 ```
-using `model.derivatives["observables"]["u"|"x"|"z"]` — same pattern as the `J` matrix built on linear.py:83.
+- Set:
+```python
+b_i = steady_dict[observable_name]
+```
 
-### 5c. `build_state_space(model) -> StateSpaceModel`
+This keeps measurement selection outside the model codegen path and avoids duplicated symbolic definitions like `("inflation_obs", "pi")`.
+
+### 5c. `build_state_space(model, observables, meas_err=None) -> StateSpaceModel`
 
 In `estimation/likelihood.py`:
 - **A** ← `linear_model.A_s`
 - **R** ← `linear_model.B_s`
 - **Q** ← diagonal from `params["VOL_<shock>"] ** 2` over `model.exog_list`
-- **Z, b** ← from the linearized model (Step 5b)
+- **Z, b** ← assembled from the selected observables (Step 5b)
 - **H** ← optional `meas_err` kwarg: `dict[obs_name, stdev]` → diagonal `H`, or full matrix; default zero
 
-### 5d. `log_likelihood(model, data, *, meas_err=None, fixed_init=None) -> float`
+### 5d. Split likelihood evaluation into a model-facing wrapper and an SSM-facing core
 
-Builds the `StateSpaceModel`, creates `StateSpaceEstimates(ssm, data)`, runs `kalman_filter`, returns `log_like`. On any failure (bad steady state, non-PSD covariance, etc.) returns `-1e10`. The observables come from the model itself — `data` columns must match the order of `model.var_lists["observable"]`.
+Use two layers:
+
+```python
+def log_likelihood_ssm(
+    ssm: StateSpaceModel,
+    data: np.ndarray,
+    *,
+    fixed_init: list[int] | None = None,
+) -> float
+```
+
+and
+
+```python
+def log_likelihood(
+    model: Model,
+    data: np.ndarray,
+    *,
+    observables: list[str],
+    meas_err: dict[str, float] | np.ndarray | None = None,
+    fixed_init: list[int] | None = None,
+) -> float
+```
+
+`log_likelihood(...)` should build the `StateSpaceModel` and then delegate to `log_likelihood_ssm(...)`.
+
+Rationale:
+- `log_likelihood_ssm(...)` avoids repeated state-space assembly when the caller already has `ssm`,
+- it cleanly separates "build measurement system" from "run Kalman filter",
+- it avoids recomputing derivatives inside the filtering step itself.
+
+On any failure (bad steady state, non-PSD covariance, etc.) return `-1e10`. The `data` columns must match the order of the passed `observables`.
 
 ## Step 6 — `EstimParam` types + high-level `estimate()` (`estimate.py`)
 
@@ -119,8 +169,9 @@ Top-level function:
 def estimate(
     model: Model,
     params_to_estimate: list[EstimParam],
-    data: np.ndarray,                    # (Nt, Ny); columns match model.var_lists["observable"]
+    data: np.ndarray,                    # (Nt, Ny); columns match `observables`
     *,
+    observables: list[str],
     estimation_label: str,
     Nsim: int = 10_000,
     n_chains: int = 1,
@@ -141,7 +192,7 @@ Internals:
    - Copy the model (`update_copy` already shares function bundles → no recompile).
    - Write `x[i] → model.params[param.name]` for each `EstimParam`.
    - Call `model.solve_steady()` then `linear_model = model.linearize()`.
-   - Return `log_likelihood(model, data, meas_err=...)`.
+   - Return `log_likelihood(model, data, observables=observables, meas_err=...)`.
    - Wrap in `try/except` → `-1e10` so bad parameter draws don't crash the chain.
 3. Instantiate `RWMC(log_like=log_like, prior=prior, lb=lb, ub=ub, names=names, model_label=model.label, estimation_label=estimation_label)`.
 4. Optionally `find_mode(x0)` → `compute_hessian()`; otherwise use `CH_inv`.
@@ -192,7 +243,7 @@ Hooks into existing `resolve_output_path` where reasonable but mostly stays self
 - Chain resumption (deferred per #6).
 - Rewriting the Kalman filter in JAX (current loop-based numpy version works; re-JAX-ifying is a later optimization).
 - Touching the existing `calibrate()` pipeline. Estimation and calibration stay separate.
-- Anything that makes `estimate()` infer observable equations automatically — user must declare them.
+- Anything that makes `estimate()` infer transformed observables automatically — user must define any such quantities as ordinary model variables first, then select them via `observables=[...]`.
 
 ## Rough LOC / risk estimate
 
@@ -202,10 +253,10 @@ Hooks into existing `resolve_output_path` where reasonable but mostly stays self
 | `prior.py` | 190 (verbatim) | None |
 | `mcmc.py` | ~700 (ported, IO simplified) | Medium — IO rewrite is where bugs land |
 | `state_space.py` | ~550 (verbatim except 2 imports) | Low |
-| `likelihood.py` | ~100 (new, shrunk by Step 5a/5b doing the work) | Low |
+| `likelihood.py` | ~120 (new, includes measurement selection + Kalman wrapper) | Low |
 | `estimate.py` | ~200 (new) | Medium |
 | `io.py` | ~120 (new) | Low |
-| Model changes for `observable` category | ~50 across `constants.py`, `model.py`, `linear.py`, codegen templates | Medium — touches codegen path |
+| Model changes for measurement selection support | ~20 across `model.py`/`linear.py` | Low |
 | tests | ~100 | — |
 
 ## Open questions flagged for follow-up

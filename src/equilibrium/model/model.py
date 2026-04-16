@@ -2070,7 +2070,6 @@ class Model:
         E = self.fcn("expectations", u, x, z, u, x, z, params)
         inter = self.fcn("intermediates", u, x, z, params)
         exp_vars = self.fcn("expectations_variables", u, x, z, E, params)
-
         return np.hstack((u, x, z, inter, E, exp_vars))
 
     def simulate_linear(self, Nt, s_init=None, shocks=None):
@@ -2251,6 +2250,7 @@ class Model:
 
         # Mark model as linearized
         self._linearized = True
+        return self.linear_mod
 
     def save_linear_irfs(
         self,
