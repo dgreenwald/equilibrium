@@ -116,6 +116,7 @@ class Prior:
         self.dists = []
         self.names = []
         self.non_flat_names = []
+        self._non_flat_indices = []
 
     def add(self, prior_type, name=None, *args, **kwargs):
         """Add a single prior component.
@@ -140,6 +141,7 @@ class Prior:
 
         if this_prior is not None:
             self.non_flat_names.append(name)
+            self._non_flat_indices.append(len(self.dists) - 1)
 
     def logpdf(self, vals):
         """Compute the total log probability density for a set of parameter values.
@@ -159,13 +161,12 @@ class Prior:
             Sum of ``logpdf`` values across all non-flat components, or
             ``0.0`` if every component is flat.
         """
-        logpdf_list = [
-            dist.logpdf(val) for dist, val in zip(self.dists, vals) if dist is not None
-        ]
-        if logpdf_list:
-            return np.sum(logpdf_list)
-        else:
+        if not self._non_flat_indices:
             return 0.0
+        total = 0.0
+        for idx in self._non_flat_indices:
+            total += self.dists[idx].logpdf(vals[idx])
+        return total
 
     def sample(self, n_samp):
         """Draw independent samples from all prior components.
