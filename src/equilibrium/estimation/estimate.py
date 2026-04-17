@@ -156,6 +156,7 @@ def estimate(
     sample_kwargs: dict | None = None,
     mode_kwargs: dict | None = None,
     CH_inv: np.ndarray | None = None,
+    in_deviations: bool = False,
 ) -> EstimationResult:
     """Estimate model parameters by RWMC on the posterior."""
     _validate_model_ready(model)
@@ -198,6 +199,7 @@ def estimate(
                 observables=observables,
                 meas_err=meas_err,
                 fixed_init=fixed_init,
+                in_deviations=in_deviations,
             )
         except Exception:
             return -1e10

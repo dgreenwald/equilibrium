@@ -107,3 +107,17 @@ def test_log_likelihood_ssm_bad_shape_returns_floor():
     ssm = build_state_space(mod, observables=["y", "c"])
     data = np.zeros((10, 1))
     assert log_likelihood_ssm(ssm, data) == -1e10
+
+
+def test_build_state_space_in_deviations():
+    mod, _ = _make_observable_rbc_model()
+    observables = ["y", "c"]
+    ssm = build_state_space(mod, observables=observables, in_deviations=True)
+    np.testing.assert_allclose(ssm.b, np.zeros(2))
+
+    ssm_full = build_state_space(mod, observables=observables, in_deviations=False)
+    np.testing.assert_allclose(
+        ssm_full.b, [mod.steady_dict[name] for name in observables]
+    )
+    # check that b's in ssm_full are not all zeros to be sure.
+    assert np.any(ssm_full.b != 0)

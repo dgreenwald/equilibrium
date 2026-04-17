@@ -28,7 +28,7 @@ def _measurement_covariance(obs_names, meas_err):
     return H
 
 
-def _measurement_matrices(model, observables):
+def _measurement_matrices(model, observables, in_deviations=False):
     linear_model = model.linear_mod
     if linear_model is None or linear_model.A_s is None or linear_model.B_s is None:
         raise RuntimeError(
@@ -89,12 +89,17 @@ def _measurement_matrices(model, observables):
             row = np.asarray(linear_model.L[idx, :], dtype=float)
 
         Z_rows.append(row)
-        b.append(float(model.steady_dict[name]))
+        if in_deviations:
+            b.append(0.0)
+        else:
+            b.append(float(model.steady_dict[name]))
 
     return np.vstack(Z_rows), np.asarray(b, dtype=float)
 
 
-def build_state_space(model, observables, meas_err=None) -> StateSpaceModel:
+def build_state_space(
+    model, observables, meas_err=None, in_deviations=False
+) -> StateSpaceModel:
     """Build a state-space model from a linearized equilibrium model."""
     linear_model = getattr(model, "linear_mod", None)
     if linear_model is None or linear_model.A_s is None or linear_model.B_s is None:
@@ -103,7 +108,7 @@ def build_state_space(model, observables, meas_err=None) -> StateSpaceModel:
         )
 
     obs_names = list(observables)
-    Z, b = _measurement_matrices(model, obs_names)
+    Z, b = _measurement_matrices(model, obs_names, in_deviations=in_deviations)
     Q = np.diag([float(model.params[f"VOL_{shock}"]) ** 2 for shock in model.exog_list])
     H = _measurement_covariance(obs_names, meas_err)
 
@@ -140,7 +145,7 @@ def log_likelihood_ssm(ssm, data, *, fixed_init=None) -> float:
 
 
 def log_likelihood(
-    model, data, *, observables, meas_err=None, fixed_init=None
+    model, data, *, observables, meas_err=None, fixed_init=None, in_deviations=False
 ) -> float:
     """Evaluate the Gaussian log-likelihood for observed model data."""
     try:
@@ -155,7 +160,9 @@ def log_likelihood(
                 f"Data must have {expected_ny} observable columns, got {y.shape[1]}."
             )
 
-        ssm = build_state_space(model, observables=obs_names, meas_err=meas_err)
+        ssm = build_state_space(
+            model, observables=obs_names, meas_err=meas_err, in_deviations=in_deviations
+        )
         return log_likelihood_ssm(ssm, y, fixed_init=fixed_init)
     except Exception:
         return -1e10
