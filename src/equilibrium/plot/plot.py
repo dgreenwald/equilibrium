@@ -202,7 +202,7 @@ def _normalize_panel_line_specs(
 def _compute_irf_ylim(
     ydata: Sequence[np.ndarray],
     *,
-    zero_span_pad: float = 1e-6,
+    min_span: float = 1e-6,
     pad_frac: float = 0.1,
 ) -> Optional[tuple[float, float]]:
     """Compute finite y-axis limits for IRF-style plots."""
@@ -218,13 +218,16 @@ def _compute_irf_ylim(
     combined = np.concatenate(finite_chunks)
     ymin = float(np.min(combined))
     ymax = float(np.max(combined))
+    midpoint = 0.5 * (ymin + ymax)
+    span = ymax - ymin
 
-    if ymax - ymin < 1e-12:
-        ymin -= zero_span_pad
-        ymax += zero_span_pad
+    if span < min_span:
+        half_span = 0.5 * min_span
+        ymin = midpoint - half_span
+        ymax = midpoint + half_span
+        span = min_span
 
-    spread = ymax - ymin
-    return (ymin - pad_frac * spread, ymax + pad_frac * spread)
+    return (ymin - pad_frac * span, ymax + pad_frac * span)
 
 
 def plot_paths(
@@ -255,7 +258,7 @@ def plot_paths(
     smallfont: int = 10,
     leg_outside: bool = False,
     show_grid: bool = False,
-    irf_limits: bool = False,
+    adjust_y_axis: bool = True,
     plot_size: Optional[Tuple[float, float]] = None,
     use_markers: bool = True,
     marker_styles: Optional[Dict[str, str]] = None,
@@ -319,6 +322,10 @@ def plot_paths(
     max_decimals : int, default 3
         Maximum number of decimals shown in y-axis tick labels after precision
         harmonization.
+    adjust_y_axis : bool, default True
+        Whether to compute panel-specific y-axis limits from the plotted data.
+        When enabled, non-finite values are ignored and each panel receives a
+        minimum total y-span of ``1e-6`` before padding is applied.
     grid : np.ndarray, optional
         Custom x-axis grid. Defaults to ``np.arange(drop_obs, Nt)``.
     drop_obs : int, default 0
@@ -528,8 +535,8 @@ def plot_paths(
             vidx = var_indices[total_done + i]
             title_text = var_titles.get(vname, vname)
 
-            # compute y-lims if irf_limits requested (collect across groups we will plot)
-            if irf_limits:
+            # compute y-lims if requested (collect across groups we will plot)
+            if adjust_y_axis:
                 ydata = []
                 if base_group_names is None:
                     # no named groups; plot the first group's series

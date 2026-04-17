@@ -374,8 +374,19 @@ def test_compute_irf_ylim_returns_none_when_all_values_are_non_finite():
     assert ylim is None
 
 
-def test_plot_paths_irf_limits_handles_non_finite_values(tmp_path):
-    """plot_paths should not crash when IRF data contains NaN/inf values."""
+def test_compute_irf_ylim_enforces_minimum_span_symmetrically():
+    """Very small finite ranges should be expanded evenly around their midpoint."""
+    ylim = _compute_irf_ylim(
+        [np.array([1.0e-12, 3.0e-12])],
+        min_span=1.0e-6,
+        pad_frac=0.0,
+    )
+
+    assert ylim == pytest.approx((-4.99998e-07, 5.00002e-07))
+
+
+def test_plot_paths_adjust_y_axis_handles_non_finite_values(tmp_path):
+    """plot_paths should not crash when axis adjustment sees NaN/inf values."""
     paths = plot_paths(
         path_vals=np.array(
             [
@@ -391,7 +402,7 @@ def test_plot_paths_irf_limits_handles_non_finite_values(tmp_path):
         group_names=["A", "B"],
         plot_dir=tmp_path,
         plot_type="png",
-        irf_limits=True,
+        adjust_y_axis=True,
         announce_dir=False,
     )
 
