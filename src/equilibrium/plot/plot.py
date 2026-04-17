@@ -18,7 +18,7 @@ from typing import (
 
 import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib.ticker import MaxNLocator
+from matplotlib.ticker import MaxNLocator, ScalarFormatter
 from tabulate import tabulate
 
 if TYPE_CHECKING:
@@ -45,6 +45,40 @@ OVERLAY_STYLE_PRESETS = {
 }
 DEFAULT_OVERLAY_COLOR = "black"
 DEFAULT_OVERLAY_STYLE = "dashdot"  # Dash-dot line ('-.')
+
+
+class HarmonizedScalarFormatter(ScalarFormatter):
+    """Scalar formatter with shared precision based on compact `%g` labels."""
+
+    def __init__(self, *args, max_decimals: int = 3, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.max_decimals = max_decimals
+
+    def _set_format(self):
+        if len(self.locs) < 2:
+            _locs = [*self.locs, *self.axis.get_view_interval()]
+        else:
+            _locs = self.locs
+
+        scaled_locs = (np.asarray(_locs) - self.offset) / 10.0**self.orderOfMagnitude
+        if len(self.locs) < 2:
+            scaled_locs = scaled_locs[:-2]
+
+        finite_locs = scaled_locs[np.isfinite(scaled_locs)]
+        max_decimals = 0
+        for loc in finite_locs:
+            compact = f"{loc:g}"
+            if "e" in compact or "E" in compact:
+                mantissa = compact.split("e")[0].split("E")[0]
+            else:
+                mantissa = compact
+            if "." in mantissa:
+                max_decimals = max(max_decimals, len(mantissa.split(".")[1]))
+
+        max_decimals = min(max_decimals, self.max_decimals)
+        self.format = f"%1.{max_decimals}f"
+        if self._usetex or self._useMathText:
+            self.format = r"$\mathdefault{%s}$" % self.format
 
 
 @dataclass(frozen=True)
@@ -165,6 +199,34 @@ def _normalize_panel_line_specs(
     return normalized
 
 
+def _compute_irf_ylim(
+    ydata: Sequence[np.ndarray],
+    *,
+    zero_span_pad: float = 1e-6,
+    pad_frac: float = 0.1,
+) -> Optional[tuple[float, float]]:
+    """Compute finite y-axis limits for IRF-style plots."""
+    finite_chunks: List[np.ndarray] = []
+    for y in ydata:
+        finite_y = np.asarray(y)[np.isfinite(y)]
+        if finite_y.size:
+            finite_chunks.append(finite_y)
+
+    if not finite_chunks:
+        return None
+
+    combined = np.concatenate(finite_chunks)
+    ymin = float(np.min(combined))
+    ymax = float(np.max(combined))
+
+    if ymax - ymin < 1e-12:
+        ymin -= zero_span_pad
+        ymax += zero_span_pad
+
+    spread = ymax - ymin
+    return (ymin - pad_frac * spread, ymax + pad_frac * spread)
+
+
 def plot_paths(
     path_vals: np.ndarray,
     full_list: Sequence[str],
@@ -183,6 +245,7 @@ def plot_paths(
     n_per_row: int = 2,
     xbins: int = 5,
     ybins: Optional[int] = None,
+    max_decimals: int = 3,
     drop_obs: int = 0,
     group_colors: Optional[Dict[str, str]] = None,
     group_styles: Optional[Dict[str, str]] = None,
@@ -253,6 +316,9 @@ def plot_paths(
         Named style switch used to toggle defaults for linewidth and layout.
     max_per_page : int, default 8
         Maximum number of subplots per page before starting a new figure.
+    max_decimals : int, default 3
+        Maximum number of decimals shown in y-axis tick labels after precision
+        harmonization.
     grid : np.ndarray, optional
         Custom x-axis grid. Defaults to ``np.arange(drop_obs, Nt)``.
     drop_obs : int, default 0
@@ -480,13 +546,7 @@ def plot_paths(
                                 )
                             for gg in comp:
                                 ydata.append(arr[group_index[gg], drop_obs:, vidx])
-                ymin = np.min([np.min(y) for y in ydata]) if ydata else -1e-6
-                ymax = np.max([np.max(y) for y in ydata]) if ydata else 1e-6
-                if ymax - ymin < 1e-12:
-                    ymin -= 1e-6
-                    ymax += 1e-6
-                spread = ymax - ymin
-                ylim = (ymin - 0.1 * spread, ymax + 0.1 * spread)
+                ylim = _compute_irf_ylim(ydata)
             else:
                 ylim = None
 
@@ -583,7 +643,15 @@ def plot_paths(
 
             ax.xaxis.set_major_locator(MaxNLocator(nbins=xbins))
             ax.yaxis.set_major_locator(MaxNLocator(nbins=ybins))
-            ax.ticklabel_format(useOffset=False)
+            ax.yaxis.set_major_formatter(
+                HarmonizedScalarFormatter(
+                    useOffset=False,
+                    useMathText=True,
+                    max_decimals=max_decimals,
+                )
+            )
+            ax.yaxis.get_major_formatter().set_scientific(True)
+            ax.yaxis.get_major_formatter().set_powerlimits((-3, 3))
 
             # page-level title on top row if requested
             if (title_str is not None) and (not var_in_title):

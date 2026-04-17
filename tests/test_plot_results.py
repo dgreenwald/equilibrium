@@ -19,7 +19,9 @@ from equilibrium.plot import (
     plot_deterministic_results,
     plot_irf_results,
     plot_model_irfs,
+    plot_paths,
 )
+from equilibrium.plot.plot import _compute_irf_ylim
 from equilibrium.settings import get_settings
 from equilibrium.solvers import deterministic
 from equilibrium.solvers.det_spec import DetSpec
@@ -351,6 +353,132 @@ def test_panel_line_labels_ordered_after_group_labels(tmp_path, monkeypatch):
     assert "Baseline" in labels
     assert "Target" in labels
     assert labels.index("Baseline") < labels.index("Target")
+
+
+def test_compute_irf_ylim_ignores_non_finite_values():
+    """IRF limits should be computed from finite observations only."""
+    ylim = _compute_irf_ylim(
+        [
+            np.array([np.nan, 0.0, 1.0, np.inf, 2.0]),
+            np.array([-np.inf, -1.0, 0.0, np.nan, 1.0]),
+        ]
+    )
+
+    assert ylim == pytest.approx((-1.3, 2.3))
+
+
+def test_compute_irf_ylim_returns_none_when_all_values_are_non_finite():
+    """IRF limits should be skipped when no finite observations exist."""
+    ylim = _compute_irf_ylim([np.array([np.nan, np.inf, -np.inf])])
+
+    assert ylim is None
+
+
+def test_plot_paths_irf_limits_handles_non_finite_values(tmp_path):
+    """plot_paths should not crash when IRF data contains NaN/inf values."""
+    paths = plot_paths(
+        path_vals=np.array(
+            [
+                [[np.nan], [0.0], [1.0], [np.inf], [2.0]],
+                [[-np.inf], [-1.0], [0.0], [np.nan], [1.0]],
+            ]
+        ),
+        full_list=["x"],
+        include_list=["x"],
+        title_str=None,
+        x_str="Period",
+        prefix="nonfinite_irf",
+        group_names=["A", "B"],
+        plot_dir=tmp_path,
+        plot_type="png",
+        irf_limits=True,
+        announce_dir=False,
+    )
+
+    assert paths
+    for path in paths:
+        assert path.exists()
+
+
+def test_plot_paths_uses_compact_y_tick_labels(tmp_path, monkeypatch):
+    """Small-valued panels should use compact scientific y tick labels."""
+    from matplotlib.figure import Figure
+
+    saved_figures = []
+    original_savefig = Figure.savefig
+
+    def _savefig_spy(self, *args, **kwargs):
+        saved_figures.append(self)
+        return original_savefig(self, *args, **kwargs)
+
+    monkeypatch.setattr(Figure, "savefig", _savefig_spy)
+
+    paths = plot_paths(
+        path_vals=np.array([[[1.2e-8], [1.8e-8], [2.4e-8], [3.0e-8], [3.6e-8]]]),
+        full_list=["x"],
+        include_list=["x"],
+        title_str=None,
+        x_str="Period",
+        prefix="compact_ticks",
+        group_names=["A"],
+        plot_dir=tmp_path,
+        plot_type="png",
+        announce_dir=False,
+    )
+
+    assert paths
+    assert saved_figures
+
+    ax = saved_figures[-1].axes[0]
+    ax.figure.canvas.draw()
+    ticklabels = [tick.get_text() for tick in ax.get_yticklabels() if tick.get_text()]
+    offset_text = ax.yaxis.get_offset_text().get_text()
+    formatter = ax.yaxis.get_major_formatter()
+
+    assert ticklabels
+    assert type(formatter).__name__ == "HarmonizedScalarFormatter"
+    assert all("\\mathdefault{" in label for label in ticklabels)
+    assert "10^" in offset_text
+    tick_values = [label.split("{")[-1].split("}")[0] for label in ticklabels]
+    decimal_lengths = {len(value.split(".")[1]) for value in tick_values if "." in value}
+    assert len(decimal_lengths) <= 1
+    assert not decimal_lengths or max(decimal_lengths) <= 3
+
+
+def test_plot_paths_respects_max_decimals_parameter(tmp_path, monkeypatch):
+    """plot_paths should expose the y tick precision cap."""
+    from matplotlib.figure import Figure
+
+    saved_figures = []
+    original_savefig = Figure.savefig
+
+    def _savefig_spy(self, *args, **kwargs):
+        saved_figures.append(self)
+        return original_savefig(self, *args, **kwargs)
+
+    monkeypatch.setattr(Figure, "savefig", _savefig_spy)
+
+    plot_paths(
+        path_vals=np.array([[[1.23e-8], [1.67e-8], [2.01e-8], [2.45e-8], [2.89e-8]]]),
+        full_list=["x"],
+        include_list=["x"],
+        title_str=None,
+        x_str="Period",
+        prefix="max_decimals_ticks",
+        group_names=["A"],
+        plot_dir=tmp_path,
+        plot_type="png",
+        announce_dir=False,
+        max_decimals=1,
+    )
+
+    ax = saved_figures[-1].axes[0]
+    ax.figure.canvas.draw()
+    ticklabels = [tick.get_text() for tick in ax.get_yticklabels() if tick.get_text()]
+    tick_values = [label.split("{")[-1].split("}")[0] for label in ticklabels]
+    decimal_lengths = {len(value.split(".")[1]) for value in tick_values if "." in value}
+
+    assert not decimal_lengths or max(decimal_lengths) <= 1
 
 
 class TestSequenceResultSplice:
