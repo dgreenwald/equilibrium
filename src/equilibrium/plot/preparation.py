@@ -261,6 +261,9 @@ def prepare_deterministic_paths(
     series_transforms: Optional[
         Mapping[str, Union["SeriesTransform", Mapping[str, any]]]
     ] = None,
+    overlay_series_transforms: Optional[
+        Mapping[str, Union["SeriesTransform", Mapping[str, any]]]
+    ] = None,
     result_labels: Optional[Sequence[tuple[str, Optional[str]]]] = None,
     result_kind: str = "sequence",
     save_dir: Optional[Union[str, Path]] = None,
@@ -291,9 +294,13 @@ def prepare_deterministic_paths(
         objects. If None, SequenceResults use their default splice length, and
         the final output uses the minimum path length across all results.
     series_transforms : dict[str, SeriesTransform or dict], optional
-        Per-series transform specifications keyed by series name. Applies
-        across UX, Z, and Y names for each result (e.g., log_to_level,
-        deviations from steady state).
+        Per-series transform specifications keyed by series name for model
+        results. Applies across UX, Z, and Y names for each result (e.g.,
+        log_to_level, deviations from steady state).
+    overlay_series_transforms : dict[str, SeriesTransform or dict], optional
+        Per-series transform specifications applied only to the overlay result.
+        When omitted, overlays inherit ``series_transforms`` for backward
+        compatibility.
     result_labels : Sequence[tuple[str, Optional[str]]], optional
         List of (model_label, experiment_label) pairs to load and prepare. Loaded
         results are appended after any explicit ``results``.
@@ -446,15 +453,26 @@ def prepare_deterministic_paths(
     if not results_list:
         raise ValueError("results must be a non-empty sequence")
 
-    # Apply series transforms if provided
+    # Apply model/overlay transforms separately so empirical overlays can use
+    # different baselines or unit conversions than model-generated paths.
     processed_results: List[DeterministicResult] = []
-    if series_transforms:
-        for result in results_list:
-            processed_results.append(
-                result.transform(series_transforms=series_transforms)
-            )
-    else:
-        processed_results = results_list
+    overlay_idx = len(results_list) - 1 if overlay_data is not None else None
+    effective_overlay_transforms = (
+        overlay_series_transforms
+        if overlay_series_transforms is not None
+        else series_transforms
+    )
+
+    for idx, result in enumerate(results_list):
+        transforms = (
+            effective_overlay_transforms
+            if overlay_idx is not None and idx == overlay_idx
+            else series_transforms
+        )
+        if transforms:
+            processed_results.append(result.transform(series_transforms=transforms))
+        else:
+            processed_results.append(result)
 
     # Set default result names
     if result_names is None:

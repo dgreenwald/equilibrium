@@ -902,6 +902,9 @@ def plot_deterministic_results(
     series_transforms: Optional[
         Mapping[str, Union[SeriesTransform, Mapping[str, Any]]]
     ] = None,
+    overlay_series_transforms: Optional[
+        Mapping[str, Union[SeriesTransform, Mapping[str, Any]]]
+    ] = None,
     result_labels: Optional[Sequence[tuple[str, Optional[str]]]] = None,
     result_kind: str = "sequence",
     save_dir: Optional[Union[str, Path]] = None,
@@ -968,8 +971,12 @@ def plot_deterministic_results(
         regime structure (full splice length), and the final plot uses the
         minimum path length across all processed results.
     series_transforms : dict[str, SeriesTransform or dict], optional
-        Per-series transform specifications keyed by series name. Applies
-        across UX, Z, and Y names for each result.
+        Per-series transform specifications keyed by series name for model
+        results. Applies across UX, Z, and Y names for each result.
+    overlay_series_transforms : dict[str, SeriesTransform or dict], optional
+        Per-series transform specifications applied only to the overlay result.
+        When omitted, overlays inherit ``series_transforms`` for backward
+        compatibility.
     result_names : Sequence[str], optional
         Names for each result (used in legends). If None, defaults to
         explicit "Result {i}" entries followed by label-derived names
@@ -1092,6 +1099,7 @@ def plot_deterministic_results(
         include_list=include_list,
         T_max=T_max,
         series_transforms=series_transforms,
+        overlay_series_transforms=overlay_series_transforms,
         result_labels=result_labels,
         result_kind=result_kind,
         save_dir=save_dir,
