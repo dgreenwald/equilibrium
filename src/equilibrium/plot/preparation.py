@@ -287,9 +287,10 @@ def prepare_deterministic_paths(
         in a result will be filled with NaN. If None, defaults to all variables
         present in any result.
     T_max : int, optional
-        Maximum number of time periods to include when splicing SequenceResult
-        objects. If None, SequenceResults use their default splice length, and
-        the final output uses the minimum path length across all results.
+        Maximum number of time periods to include. Applied to all result types:
+        SequenceResult objects are spliced to T_max, and the final output is
+        capped at T_max periods. If None, uses the minimum path length across
+        all results.
     series_transforms : dict[str, SeriesTransform or dict], optional
         Per-series transform specifications keyed by series name for model
         results. Applies across UX, Z, and Y names for each result (e.g.,
@@ -517,8 +518,10 @@ def prepare_deterministic_paths(
             f"are present in any result. Available variables: {all_var_names}"
         )
 
-    # Determine the common time dimension (min across all results)
+    # Determine the common time dimension (min across all results, capped at T_max)
     n_periods = min(r.UX.shape[0] for r in processed_results)
+    if T_max is not None:
+        n_periods = min(n_periods, T_max)
 
     # Build path_vals array: shape (n_results, n_periods, n_vars)
     n_results = len(processed_results)
