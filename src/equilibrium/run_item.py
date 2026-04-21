@@ -6,8 +6,8 @@ Run grouping utilities built around ModSpec normalization.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Iterable
+from dataclasses import dataclass, field
+from typing import Any, Iterable
 
 from .modspec import ModSpec
 
@@ -34,6 +34,9 @@ class RunItem:
         Iterable of experiment specifications. Each item is normalized into a
         ``ModSpec``. To represent one experiment with multiple features, pass a
         nested iterable such as ``[["low_rates", "boom"]]``.
+    metadata : dict, optional
+        Arbitrary user-supplied metadata. Not used by the solver; ignored for
+        equality and hashing.
 
     Notes
     -----
@@ -44,11 +47,13 @@ class RunItem:
 
     mod_spec: ModSpec
     experiments: tuple[ModSpec, ...]
+    metadata: dict[str, Any] = field(default_factory=dict, compare=False, hash=False)
 
     def __init__(
         self,
         mod_spec: SpecInput,
         experiments: Iterable[SpecInput] | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         object.__setattr__(self, "mod_spec", _coerce_modspec(mod_spec))
 
@@ -56,6 +61,7 @@ class RunItem:
             _coerce_modspec(experiment) for experiment in (experiments or ())
         )
         object.__setattr__(self, "experiments", normalized_experiments)
+        object.__setattr__(self, "metadata", metadata if metadata is not None else {})
 
     @property
     def label(self) -> str:
@@ -69,4 +75,4 @@ class RunItem:
 
     def with_experiments(self, experiments: Iterable[SpecInput]) -> "RunItem":
         """Return a new run item with the same model spec and new experiments."""
-        return RunItem(self.mod_spec, experiments=experiments)
+        return RunItem(self.mod_spec, experiments=experiments, metadata=self.metadata)
