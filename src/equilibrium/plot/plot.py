@@ -204,6 +204,7 @@ def _compute_irf_ylim(
     *,
     min_span: float = 1e-6,
     pad_frac: float = 0.1,
+    include_zero: bool = False,
 ) -> Optional[tuple[float, float]]:
     """Compute finite y-axis limits for IRF-style plots."""
     finite_chunks: List[np.ndarray] = []
@@ -218,6 +219,10 @@ def _compute_irf_ylim(
     combined = np.concatenate(finite_chunks)
     ymin = float(np.min(combined))
     ymax = float(np.max(combined))
+
+    if include_zero:
+        ymin = min(ymin, 0.0)
+        ymax = max(ymax, 0.0)
     midpoint = 0.5 * (ymin + ymax)
     span = ymax - ymin
 
@@ -553,7 +558,7 @@ def plot_paths(
                                 )
                             for gg in comp:
                                 ydata.append(arr[group_index[gg], drop_obs:, vidx])
-                ylim = _compute_irf_ylim(ydata)
+                ylim = _compute_irf_ylim(ydata, include_zero=zero_line)
             else:
                 ylim = None
 
