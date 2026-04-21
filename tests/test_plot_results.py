@@ -451,7 +451,9 @@ def test_plot_paths_uses_compact_y_tick_labels(tmp_path, monkeypatch):
     assert all("\\mathdefault{" in label for label in ticklabels)
     assert "10^" in offset_text
     tick_values = [label.split("{")[-1].split("}")[0] for label in ticklabels]
-    decimal_lengths = {len(value.split(".")[1]) for value in tick_values if "." in value}
+    decimal_lengths = {
+        len(value.split(".")[1]) for value in tick_values if "." in value
+    }
     assert len(decimal_lengths) <= 1
     assert not decimal_lengths or max(decimal_lengths) <= 3
 
@@ -487,7 +489,9 @@ def test_plot_paths_respects_max_decimals_parameter(tmp_path, monkeypatch):
     ax.figure.canvas.draw()
     ticklabels = [tick.get_text() for tick in ax.get_yticklabels() if tick.get_text()]
     tick_values = [label.split("{")[-1].split("}")[0] for label in ticklabels]
-    decimal_lengths = {len(value.split(".")[1]) for value in tick_values if "." in value}
+    decimal_lengths = {
+        len(value.split(".")[1]) for value in tick_values if "." in value
+    }
 
     assert not decimal_lengths or max(decimal_lengths) <= 1
 
@@ -1650,9 +1654,8 @@ class TestOverlayToResult:
         assert result.model_label == "TestData"
         assert result.converged is True
         assert result.final_residual == 0.0
-        assert result.Z.shape == (2, 1)
-        assert np.all(result.Z == 0.0)
-        assert result.exog_names == ["_placeholder"]
+        assert result.Z.shape == (2, 0)
+        assert result.exog_names == []
         assert result.y_names == []
         assert result.Y is None
 

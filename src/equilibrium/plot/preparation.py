@@ -236,15 +236,12 @@ def overlay_to_result(
 
     n_periods = UX.shape[0]
 
-    # Create placeholder Z (zeros)
-    Z = np.zeros((n_periods, 1))
-
     # Create DeterministicResult
     return DeterministicResult(
         UX=UX,
-        Z=Z,
+        Z=np.zeros((n_periods, 0)),
         var_names=var_names,
-        exog_names=["_placeholder"],
+        exog_names=[],
         y_names=[],
         Y=None,
         model_label=overlay_name,
@@ -493,10 +490,14 @@ def prepare_deterministic_paths(
             result_names = list(result_names) + [overlay_name]
 
     # Determine the union of all variable names that exist in any result
-    # Include both UX variables (var_names) and intermediate variables (y_names)
+    # Include UX variables (var_names), exogenous variables (exog_names),
+    # and intermediate variables (y_names)
     all_var_names: List[str] = []
     for result in processed_results:
         for name in result.var_names:
+            if name not in all_var_names:
+                all_var_names.append(name)
+        for name in result.exog_names:
             if name not in all_var_names:
                 all_var_names.append(name)
         for name in result.y_names:
@@ -528,10 +529,11 @@ def prepare_deterministic_paths(
         for j, var_name in enumerate(var_names):
             if var_name in result.var_names:
                 var_idx = result.var_names.index(var_name)
-                # Take up to n_periods from this result
                 path_vals[i, :, j] = result.UX[:n_periods, var_idx]
+            elif var_name in result.exog_names:
+                var_idx = result.exog_names.index(var_name)
+                path_vals[i, :, j] = result.Z[:n_periods, var_idx]
             elif var_name in result.y_names and result.Y is not None:
-                # Variable is in intermediate variables (Y)
                 var_idx = result.y_names.index(var_name)
                 path_vals[i, :, j] = result.Y[:n_periods, var_idx]
 
