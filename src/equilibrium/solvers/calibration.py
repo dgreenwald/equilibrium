@@ -569,6 +569,7 @@ def calibrate(
     default_transform: Optional[SeriesTransform | Mapping[str, Any]] = None,
     return_solution: bool = False,
     progress_every: int = 1,
+    verbose: bool = False,
     label: Optional[str] = None,
     save_dir: Optional[Union[Path, str]] = None,
     initialize_from_saved: bool = False,
@@ -627,6 +628,9 @@ def calibrate(
         If True, return the (transformed) solution and model in the result.
     progress_every : int, default 1
         Log calibration progress every N evaluations. Set to 0 to disable.
+    verbose : bool, default False
+        If True, log detailed information about each target evaluation,
+        including model values, target values, and individual errors.
     label : str, optional
         Label for saving results automatically. If provided:
         - On success: saves parameters to disk.
@@ -842,7 +846,7 @@ def calibrate(
                     )
 
         test_solution = _apply_transforms(test_solution)
-        test_errors, _ = _evaluate_targets(targets, test_solution)
+        test_errors, _, _ = _evaluate_targets(targets, test_solution)
         n_targets = len(test_errors)
 
     except Exception as e:
@@ -968,7 +972,9 @@ def calibrate(
 
             # Evaluate targets - returns both errors and weights
             transformed_solution = _apply_transforms(solution)
-            errors, target_weights = _evaluate_targets(targets, transformed_solution)
+            errors, target_weights, details = _evaluate_targets(
+                targets, transformed_solution
+            )
 
             nonlocal eval_count
             eval_count += 1
@@ -988,6 +994,37 @@ def calibrate(
                     params_dict,
                     residual,
                 )
+
+                if verbose:
+                    logger.info("  Target details:")
+                    for d in details:
+                        if d["type"] == "point":
+                            logger.info(
+                                "    - %s at t=%d: model=%g, target=%g, error=%g (weight=%g)",
+                                d["variable"],
+                                d["time"],
+                                d["model_value"],
+                                d["target_value"],
+                                d["error"],
+                                d["weight"],
+                            )
+                        else:  # functional
+                            err_str = (
+                                f"{d['errors'][0]:g}"
+                                if len(d["errors"]) == 1
+                                else str([f"{e:g}" for e in d["errors"]])
+                            )
+                            weight_str = (
+                                f"{d['weights'][0]:g}"
+                                if len(d["weights"]) == 1
+                                else str([f"{w:g}" for w in d["weights"]])
+                            )
+                            logger.info(
+                                "    - %s: error=%s (weight=%s)",
+                                d["description"],
+                                err_str,
+                                weight_str,
+                            )
 
             # Return based on what's requested
             if return_weights:
@@ -1132,7 +1169,8 @@ def calibrate(
         result.model = None
 
     # Override solver-reported success if residual is not actually small
-    if result.success and result.residual > 10 * tol:
+    # This only applies to just-identified problems where we expect a zero residual
+    if is_just_identified and result.success and result.residual > 10 * tol:
         result.success = False
         result.message = (
             f"Solver reported converged but residual {result.residual:.6g} "
@@ -1171,9 +1209,9 @@ def _count_targets(targets: List[Union[PointTarget, FunctionalTarget]]) -> int:
 def _evaluate_targets(
     targets: List[Union[PointTarget, FunctionalTarget]],
     solution: Union[PathResult, DeterministicResult, IrfResult, SequenceResult],
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, List[Dict[str, Any]]]:
     """
-    Evaluate all targets against a solution and return errors and weights.
+    Evaluate all targets against a solution and return errors, weights, and details.
 
     Returns
     -------
@@ -1181,9 +1219,12 @@ def _evaluate_targets(
         Array of target errors.
     weights : np.ndarray
         Array of target weights (same length as errors).
+    details : list of dict
+        Detailed information about each target evaluation.
     """
     errors = []
     weights = []
+    details = []
 
     for target in targets:
         if isinstance(target, PointTarget):
@@ -1215,6 +1256,17 @@ def _evaluate_targets(
             error = actual_value - target.value
             errors.append(error)
             weights.append(target.weight)
+            details.append(
+                {
+                    "type": "point",
+                    "variable": target.variable,
+                    "time": target.time,
+                    "model_value": float(actual_value),
+                    "target_value": float(target.value),
+                    "error": float(error),
+                    "weight": float(target.weight),
+                }
+            )
 
         elif isinstance(target, FunctionalTarget):
             # Call user-defined function
@@ -1234,11 +1286,21 @@ def _evaluate_targets(
             else:
                 # Default to weight of 1.0 for each output
                 weights.extend([1.0] * len(func_errors))
+                func_weights = np.ones(len(func_errors))
+
+            details.append(
+                {
+                    "type": "functional",
+                    "description": target.description or "FunctionalTarget",
+                    "errors": [float(e) for e in func_errors],
+                    "weights": [float(w) for w in func_weights],
+                }
+            )
 
         else:
             raise TypeError(f"Unknown target type: {type(target)}")
 
-    return np.array(errors), np.array(weights)
+    return np.array(errors), np.array(weights), details
 
 
 def _compute_irf_from_linear_model(
