@@ -294,7 +294,7 @@ def prepare_deterministic_paths(
     series_transforms : dict[str, SeriesTransform or dict], optional
         Per-series transform specifications keyed by series name for model
         results. Applies across UX, Z, and Y names for each result (e.g.,
-        log_to_level, deviations from steady state).
+        log_to_level, deviations from steady state, first differences).
     overlay_series_transforms : dict[str, SeriesTransform or dict], optional
         Per-series transform specifications applied only to the overlay result.
         When omitted, overlays inherit ``series_transforms`` for backward

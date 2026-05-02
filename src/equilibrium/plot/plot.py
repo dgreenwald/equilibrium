@@ -977,7 +977,9 @@ def plot_deterministic_results(
         minimum path length across all processed results.
     series_transforms : dict[str, SeriesTransform or dict], optional
         Per-series transform specifications keyed by series name for model
-        results. Applies across UX, Z, and Y names for each result.
+        results. Applies across UX, Z, and Y names for each result, including
+        log-to-level conversion, deviations from a base period, and first
+        differences.
     overlay_series_transforms : dict[str, SeriesTransform or dict], optional
         Per-series transform specifications applied only to the overlay result.
         When omitted, overlays inherit ``series_transforms`` for backward

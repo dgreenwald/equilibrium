@@ -618,9 +618,10 @@ def calibrate(
         solvers during calibration evaluations.
     series_transforms : dict[str, SeriesTransform or dict], optional
         Per-series transform specifications keyed by series name. Applied to
-        solution data before evaluating targets. The transform base_index
-        refers to the time index in the solved path (t=0 is the initial
-        condition).
+        solution data before evaluating targets. These transforms can include
+        log-to-level conversion, deviations from a base period, and first
+        differences. The transform base_index refers to the time index in the
+        solved path (t=0 is the initial condition).
     default_transform : SeriesTransform or dict, optional
         Transform to apply to any series without an explicit entry in
         series_transforms.

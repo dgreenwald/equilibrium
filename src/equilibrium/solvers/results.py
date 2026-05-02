@@ -29,10 +29,16 @@ class SeriesTransform:
     """
     Transform specification for a single output series.
 
+    Transforms are applied in this order: ``log_to_level``, ``diff``,
+    ``as_changes``, then output scaling via ``scale`` and ``to_percent``.
+
     Attributes
     ----------
     diff : bool
         If True, difference the series against the base index.
+    as_changes : bool
+        If True, take first differences of the transformed series. The output
+        keeps the original length, with period 0 set to 0.
     log_to_level : bool
         If True, exponentiate the series before differencing.
     scale : float
@@ -44,6 +50,7 @@ class SeriesTransform:
     """
 
     diff: bool = False
+    as_changes: bool = False
     log_to_level: bool = False
     scale: float = 1.0
     to_percent: bool = False
@@ -67,6 +74,12 @@ class SeriesTransform:
                 transformed = (transformed / base_val) - 1.0
             else:
                 transformed = transformed - base_val
+
+        if self.as_changes:
+            changes = np.empty_like(transformed)
+            changes[0] = 0.0
+            changes[1:] = transformed[1:] - transformed[:-1]
+            transformed = changes
 
         scale_factor = self.scale * (100.0 if self.to_percent else 1.0)
         if scale_factor != 1.0:
@@ -218,7 +231,8 @@ class PathResult:
         series_transforms : dict[str, SeriesTransform or dict], optional
             Per-series transform specifications keyed by series name. Applies
             across UX, Z, and Y names. Dict values are expanded into
-            SeriesTransform.
+            SeriesTransform and can express log-to-level conversion, deviations
+            from a base period, and first differences.
         default_transform : SeriesTransform or dict, optional
             Transform to apply to any series without an explicit entry in
             series_transforms.

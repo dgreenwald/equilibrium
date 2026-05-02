@@ -571,6 +571,58 @@ class TestSequenceResultSplice:
         assert np.allclose(transformed.UX[:, 1], np.array([0.0, 2.0, 4.0]))
         assert np.allclose(transformed.Z[:, 0], np.array([0.0, 0.0, 0.0]))
 
+    def test_transform_series_as_changes(self):
+        """Test adjacent first differences with length preserved."""
+        ux = np.column_stack(
+            [
+                np.log(np.array([1.0, 1.1, 1.2])),
+                np.array([1.0, 3.0, 6.0]),
+            ]
+        )
+        z = np.array([[0.0], [0.0], [0.0]])
+
+        result = DeterministicResult(
+            UX=ux,
+            Z=z,
+            var_names=["log_Y", "C"],
+            exog_names=["Z_til"],
+        )
+
+        transforms = {
+            "log_Y": SeriesTransform(
+                log_to_level=True, as_changes=True, to_percent=True
+            ),
+            "C": {"as_changes": True},
+        }
+
+        transformed = result.transform(series_transforms=transforms)
+
+        assert np.allclose(transformed.UX[:, 0], np.array([0.0, 10.0, 10.0]))
+        assert np.allclose(transformed.UX[:, 1], np.array([0.0, 2.0, 3.0]))
+        assert np.allclose(transformed.Z[:, 0], np.array([0.0, 0.0, 0.0]))
+
+    def test_transform_series_diff_then_as_changes(self):
+        """Test that as_changes applies after deviations from the base period."""
+        ux = np.array([[10.0], [12.0], [15.0]])
+        z = np.array([[0.0], [1.0], [3.0]])
+
+        result = DeterministicResult(
+            UX=ux,
+            Z=z,
+            var_names=["Y"],
+            exog_names=["Z_til"],
+        )
+
+        transforms = {
+            "Y": SeriesTransform(diff=True, as_changes=True),
+            "Z_til": {"diff": True, "as_changes": True, "scale": 10.0},
+        }
+
+        transformed = result.transform(series_transforms=transforms)
+
+        assert np.allclose(transformed.UX[:, 0], np.array([0.0, 2.0, 3.0]))
+        assert np.allclose(transformed.Z[:, 0], np.array([0.0, 10.0, 20.0]))
+
     def test_splice_two_regimes(self):
         """Test splicing two regimes together."""
         mod = set_model()
