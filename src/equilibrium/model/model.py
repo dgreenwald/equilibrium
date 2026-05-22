@@ -2001,7 +2001,7 @@ class Model:
                 prop_name="g_equilibrium_steady_prop",
                 command_str="steady",
                 prefix=self.label,
-                floatfmt=floatfmt_vars,
+                floatfmt=effective_vars,
             )
 
         # Export parameters to {label}_params.tex
@@ -2013,7 +2013,7 @@ class Model:
                 prop_name="g_equilibrium_param_prop",
                 command_str="param",
                 prefix=self.label,
-                floatfmt=floatfmt_params,
+                floatfmt=effective_params,
             )
 
     def compute_derivatives(
