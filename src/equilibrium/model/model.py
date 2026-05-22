@@ -947,6 +947,9 @@ class Model:
         calibrate=False,
         save: bool = False,
         save_tex: bool = False,
+        tex_floatfmt: str | None = None,
+        tex_floatfmt_vars: str | None = None,
+        tex_floatfmt_params: str | None = None,
         load_initial_guess: bool = True,
         backup_to_use: int | None = None,
         verbose_iterations: bool = False,
@@ -1344,9 +1347,11 @@ class Model:
                 if save:
                     self._save_steady_snapshot()
                 if save_tex:
-                    # Export steady state variables and parameters to LaTeX
-                    # (reads JSON once, exports to two separate files)
-                    self.export_steady_to_latex()
+                    self.export_steady_to_latex(
+                        tex_floatfmt=tex_floatfmt,
+                        floatfmt_vars=tex_floatfmt_vars,
+                        floatfmt_params=tex_floatfmt_params,
+                    )
             else:
                 self.steady_dict = {}
         else:
@@ -1569,6 +1574,9 @@ class Model:
         calibrate=False,
         save: bool = False,
         save_tex: bool = False,
+        tex_floatfmt: str | None = None,
+        tex_floatfmt_vars: str | None = None,
+        tex_floatfmt_params: str | None = None,
         load_initial_guess: bool = True,
         backup_to_use: int | None = None,
         *,
@@ -1596,6 +1604,18 @@ class Model:
             If True, export steady state values to LaTeX property list files
             in {plot_dir}/tex/. Default is False. If calibrate=True, also exports
             calibrated parameters.
+        tex_floatfmt : str | None, optional
+            Default float format for both variables and parameters when
+            ``save_tex=True`` (e.g. ``".4f"``). Overridden per-group by
+            ``tex_floatfmt_vars`` / ``tex_floatfmt_params``. When None and no
+            group-specific format is set, variables default to ``".3f"`` and
+            parameters to ``".4f"``.
+        tex_floatfmt_vars : str | None, optional
+            Float format for steady state variables only. Overrides
+            ``tex_floatfmt`` for vars.
+        tex_floatfmt_params : str | None, optional
+            Float format for parameters only. Overrides ``tex_floatfmt`` for
+            params.
         initial_guess_from_label : str | None, optional
             If provided, load the initial guess for the steady state solve from
             an alternative model's saved steady state file. The file will be
@@ -1619,6 +1639,9 @@ class Model:
                 calibrate=calibrate,
                 save=save,
                 save_tex=save_tex,
+                tex_floatfmt=tex_floatfmt,
+                tex_floatfmt_vars=tex_floatfmt_vars,
+                tex_floatfmt_params=tex_floatfmt_params,
                 load_initial_guess=kwargs.get("load_initial_guess", load_initial_guess),
                 backup_to_use=kwargs.get("backup_to_use", backup_to_use),
                 verbose_iterations=use_verbose,
@@ -1903,9 +1926,10 @@ class Model:
 
     def export_steady_to_latex(
         self,
-        floatfmt_vars: str = ".3f",
-        floatfmt_params: str = ".4f",
+        floatfmt_vars: str | None = None,
+        floatfmt_params: str | None = None,
         tex_dir: Path | str | None = None,
+        tex_floatfmt: str | None = None,
     ):
         """
         Export steady state variables and parameters to separate LaTeX files.
@@ -1916,12 +1940,19 @@ class Model:
 
         Parameters
         ----------
-        floatfmt_vars : str, default ".3f"
-            Format specification for variable values.
-        floatfmt_params : str, default ".4f"
-            Format specification for parameter values.
+        floatfmt_vars : str | None, optional
+            Format specification for variable values. Overrides ``tex_floatfmt``
+            for vars. Defaults to ``".3f"`` when neither this nor ``tex_floatfmt``
+            is set.
+        floatfmt_params : str | None, optional
+            Format specification for parameter values. Overrides ``tex_floatfmt``
+            for params. Defaults to ``".4f"`` when neither this nor ``tex_floatfmt``
+            is set.
         tex_dir : Path | str | None, optional
             Directory to write .tex files. If None, uses {plot_dir}/tex/.
+        tex_floatfmt : str | None, optional
+            Shared default format for both variables and parameters. Overridden
+            per-group by ``floatfmt_vars`` / ``floatfmt_params``.
 
         Examples
         --------
@@ -1935,6 +1966,9 @@ class Model:
         # Capital: $K^* = \\steady{baseline_K}$
         # Discount factor: $\\beta = \\param{baseline_bet}$
         """
+        effective_vars = floatfmt_vars or tex_floatfmt or ".3f"
+        effective_params = floatfmt_params or tex_floatfmt or ".4f"
+
         # Read steady state once
         steady_values = io.read_steady_values(label=self.label)
 

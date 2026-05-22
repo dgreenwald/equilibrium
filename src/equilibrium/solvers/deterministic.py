@@ -27,7 +27,14 @@ ALGORITHM_SPARSE = "sparse"
 VALID_ALGORITHMS = (ALGORITHM_LBJ, ALGORITHM_SPARSE)
 
 
-def _save_regime_steady_outputs(mod, label: str, save_tex: bool = False) -> None:
+def _save_regime_steady_outputs(
+    mod,
+    label: str,
+    save_tex: bool = False,
+    tex_floatfmt: str | None = None,
+    tex_floatfmt_vars: str | None = None,
+    tex_floatfmt_params: str | None = None,
+) -> None:
     """
     Save steady-state JSON and optional LaTeX exports for a regime label.
     """
@@ -36,7 +43,11 @@ def _save_regime_steady_outputs(mod, label: str, save_tex: bool = False) -> None
         mod.label = label
         mod._save_steady_snapshot()
         if save_tex:
-            mod.export_steady_to_latex()
+            mod.export_steady_to_latex(
+                tex_floatfmt=tex_floatfmt,
+                floatfmt_vars=tex_floatfmt_vars,
+                floatfmt_params=tex_floatfmt_params,
+            )
     finally:
         mod.label = original_label
 
@@ -809,6 +820,9 @@ def solve_sequence(
     copy_model: bool = False,
     save_regime_steady: bool = False,
     save_regime_steady_tex: bool = False,
+    tex_floatfmt: str | None = None,
+    tex_floatfmt_vars: str | None = None,
+    tex_floatfmt_params: str | None = None,
     regime_labels: Optional[Sequence[str]] = None,
 ):
     """
@@ -882,6 +896,18 @@ def solve_sequence(
     save_regime_steady_tex : bool, default False
         If True, also export regime steady states to LaTeX files. This
         implies steady-state JSON snapshots are also written.
+    tex_floatfmt : str | None, optional
+        Default float format for both variables and parameters in LaTeX
+        export (e.g. ``".4f"``). Overridden per-group by
+        ``tex_floatfmt_vars`` / ``tex_floatfmt_params``. When None and no
+        group-specific format is set, variables default to ``".3f"`` and
+        parameters to ``".4f"``.
+    tex_floatfmt_vars : str | None, optional
+        Float format for steady state variables only. Overrides
+        ``tex_floatfmt`` for vars.
+    tex_floatfmt_params : str | None, optional
+        Float format for parameters only. Overrides ``tex_floatfmt`` for
+        params.
     regime_labels : sequence[str], optional
         Optional human-readable names (one per regime) appended to each
         regime steady-state label.
@@ -983,6 +1009,9 @@ def solve_sequence(
                 current_mod,
                 regime_steady_label,
                 save_tex=save_regime_steady_tex,
+                tex_floatfmt=tex_floatfmt,
+                tex_floatfmt_vars=tex_floatfmt_vars,
+                tex_floatfmt_params=tex_floatfmt_params,
             )
             regime_steady_labels.append(regime_steady_label)
 
