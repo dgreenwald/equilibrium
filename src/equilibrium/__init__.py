@@ -38,6 +38,7 @@ from .solvers.calibration import (  # noqa: E402
     RegimeParam,
     ShockParam,
     calibrate,
+    calibrate_custom,
 )
 from .solvers.det_spec import DetSpec  # noqa: E402
 from .solvers.linear_spec import LinearSpec  # noqa: E402
@@ -114,6 +115,7 @@ __all__: list[str] = [
     "DetSpec",
     "LinearSpec",
     "calibrate",
+    "calibrate_custom",
     "CalibrationResult",
     "PointTarget",
     "FunctionalTarget",

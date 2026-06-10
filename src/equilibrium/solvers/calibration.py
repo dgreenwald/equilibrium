@@ -11,6 +11,7 @@ to specified target outcomes. It supports:
 - Just-identified cases (root solving)
 - Over-identified cases (minimization)
 - Scalar and vector parameter special cases
+- Custom solution builders for non-solver workflows (calibrate_custom)
 """
 
 from __future__ import annotations
@@ -551,6 +552,351 @@ def _build_param_to_model(
     return param_to_model, initial, bounds, param_names
 
 
+def _build_model_updater(
+    model,
+    model_params: list[ModelParam],
+    suppress_solver_output: bool,
+    calibrate_initial: bool,
+) -> tuple[Callable, np.ndarray, list[tuple], list[str]]:
+    """
+    Build a model update callback from a list of ModelParam specs.
+
+    Subset of ``_build_param_to_model`` that handles only ``ModelParam``
+    (no spec, no ``RegimeParam``, no ``ShockParam``). Used by
+    ``calibrate_custom``.
+
+    Returns
+    -------
+    model_fn : callable
+        ``(params_array) -> Model``
+    initial_params : np.ndarray
+    bounds : list of tuple
+    param_names : list of str
+    """
+    if len(model_params) == 0:
+        raise ValueError("calib_params must not be empty")
+
+    for mp in model_params:
+        if mp.name not in model.params:
+            raise ValueError(
+                f"ModelParam name '{mp.name}' not found in model.params. "
+                f"Available: {sorted(model.params.keys())}"
+            )
+
+    initial = np.array([p.initial for p in model_params])
+    bounds = [p.bounds for p in model_params]
+    param_names = [p.name for p in model_params]
+
+    _cache: dict[str, Any] = {"model": None, "param_vals": None}
+
+    def model_fn(params: np.ndarray):
+        params = np.atleast_1d(params)
+        cached_vals = _cache["param_vals"]
+        if cached_vals is None or not np.array_equal(params, cached_vals):
+            param_dict = {mp.name: float(v) for mp, v in zip(model_params, params)}
+            new_model = model.update_copy(params=param_dict)
+            with _suppress_solver_output(suppress_solver_output):
+                new_model.solve_steady(calibrate=calibrate_initial, display=False)
+                new_model.linearize()
+            _cache["model"] = new_model
+            _cache["param_vals"] = params.copy()
+        return _cache["model"]
+
+    return model_fn, initial, bounds, param_names
+
+
+# ---------------------------------------------------------------------------
+# Shared calibration loop
+# ---------------------------------------------------------------------------
+
+
+def _run_calibration_loop(
+    solution_fn: Callable,
+    initial_params: np.ndarray,
+    bounds: list[tuple],
+    param_names: list[str],
+    targets: list[Union[PointTarget, FunctionalTarget]],
+    *,
+    series_transforms,
+    default_transform,
+    method: Optional[str],
+    tol: float,
+    maxiter: int,
+    suppress_solver_output: bool,
+    return_solution: bool,
+    progress_every: int,
+    verbose: bool,
+    label: Optional[str],
+    save_dir,
+    initialize_from_saved: bool,
+    load_label: Optional[str],
+) -> CalibrationResult:
+    """
+    Run the calibration optimization loop given a solution function.
+
+    Parameters
+    ----------
+    solution_fn : callable
+        ``(params_array) -> (solution, model_or_None)``.  Called at each
+        optimizer iteration.  ``solution`` is passed to ``_evaluate_targets``;
+        ``model_or_None`` is stored in ``CalibrationResult.model``.
+    initial_params : np.ndarray
+        Starting parameter values (may be modified by warm-start).
+    bounds : list of tuple
+        Per-parameter ``(lower, upper)`` bounds.
+    param_names : list of str
+        Human-readable names matching the parameter array layout.
+    targets : list of PointTarget or FunctionalTarget
+        Target specifications to match.
+    """
+    # Warm start: override initial values from a previously saved calibration
+    if initialize_from_saved:
+        _effective_load_label = load_label or label
+        if _effective_load_label is None:
+            raise ValueError(
+                "initialize_from_saved=True requires either 'label' or 'load_label' "
+                "to be set so that saved parameters can be located."
+            )
+        from ..utils.io import read_calibrated_params
+
+        try:
+            saved_params = read_calibrated_params(
+                _effective_load_label, save_dir=save_dir
+            )
+            for i, name in enumerate(param_names):
+                if name in saved_params:
+                    initial_params[i] = saved_params[name]
+            logger.info(
+                "Warm start: loaded %d/%d parameters from '%s'.",
+                sum(n in saved_params for n in param_names),
+                len(param_names),
+                _effective_load_label,
+            )
+        except FileNotFoundError:
+            logger.warning(
+                "initialize_from_saved=True but no saved file found for label '%s'. "
+                "Proceeding with original initial values.",
+                _effective_load_label,
+            )
+
+    n_params = len(initial_params)
+    is_scalar = n_params == 1
+
+    def _apply_transforms(solution):
+        if series_transforms is None and default_transform is None:
+            return solution
+        return solution.transform(
+            series_transforms=series_transforms,
+            default_transform=default_transform,
+        )
+
+    # Conservative pre-check before test evaluation
+    min_targets = sum(
+        1 for t in targets if isinstance(t, (PointTarget, FunctionalTarget))
+    )
+    if n_params > min_targets and not any(
+        isinstance(t, FunctionalTarget) for t in targets
+    ):
+        raise ValueError(
+            f"Problem is under-identified: {n_params} parameters "
+            f"but only {min_targets} targets. Add more targets or reduce parameters."
+        )
+
+    # Test evaluation to determine actual n_targets
+    try:
+        test_solution, _ = solution_fn(initial_params)
+        test_solution = _apply_transforms(test_solution)
+        test_errors, _, _ = _evaluate_targets(targets, test_solution)
+        n_targets = len(test_errors)
+    except Exception as e:
+        logger.warning(
+            "Could not determine target dimensionality from test evaluation: "
+            "%s. Assuming minimal targets.",
+            str(e),
+        )
+        n_targets = min_targets
+
+    if n_params > n_targets:
+        raise ValueError(
+            f"Problem is under-identified: {n_params} parameters "
+            f"but {n_targets} target values. Add more targets or reduce parameters."
+        )
+
+    is_just_identified = n_params == n_targets
+
+    logger.info(
+        "Calibration problem: %d params, %d targets, %s, %s",
+        n_params,
+        n_targets,
+        "just-identified" if is_just_identified else "over-identified",
+        "scalar" if is_scalar else "vector",
+    )
+
+    eval_count = 0
+
+    def _solve_and_evaluate(params, return_weights=False):
+        params = np.atleast_1d(params)
+
+        # Enforce bounds before running the solver
+        if bounds is not None:
+            for val, (lo, hi) in zip(params, bounds):
+                if val < lo or val > hi:
+                    if return_weights:
+                        return np.full(n_targets, 1e10), np.ones(n_targets)
+                    else:
+                        if is_scalar and n_targets == 1:
+                            return 1e10
+                        return np.full(n_targets, 1e10)
+
+        try:
+            solution, _ = solution_fn(params)
+            transformed = _apply_transforms(solution)
+            errors, target_weights, details = _evaluate_targets(targets, transformed)
+
+            nonlocal eval_count
+            eval_count += 1
+            if progress_every and eval_count % progress_every == 0:
+                params_dict = {
+                    name: float(val)
+                    for name, val in zip(param_names, np.atleast_1d(params), strict=False)
+                }
+                residual = np.linalg.norm(errors)
+                if return_weights:
+                    weighted_errors = target_weights * (np.asarray(errors) ** 2)
+                    residual = float(np.sqrt(np.sum(weighted_errors)))
+                logger.info(
+                    "Calibration eval %d: params=%s residual=%g",
+                    eval_count,
+                    params_dict,
+                    residual,
+                )
+
+                if verbose:
+                    logger.info("  Target details:")
+                    for d in details:
+                        if d["type"] == "point":
+                            logger.info(
+                                "    - %s at t=%d: model=%g, target=%g, error=%g (weight=%g)",
+                                d["variable"],
+                                d["time"],
+                                d["model_value"],
+                                d["target_value"],
+                                d["error"],
+                                d["weight"],
+                            )
+                        else:  # functional
+                            err_str = (
+                                f"{d['errors'][0]:g}"
+                                if len(d["errors"]) == 1
+                                else str([f"{e:g}" for e in d["errors"]])
+                            )
+                            weight_str = (
+                                f"{d['weights'][0]:g}"
+                                if len(d["weights"]) == 1
+                                else str([f"{w:g}" for w in d["weights"]])
+                            )
+                            logger.info(
+                                "    - %s: error=%s (weight=%s)",
+                                d["description"],
+                                err_str,
+                                weight_str,
+                            )
+
+            if return_weights:
+                return errors, target_weights
+            else:
+                if is_scalar and len(errors) == 1:
+                    return float(errors[0])
+                return errors
+
+        except Exception as e:
+            logger.error("Error in objective function: %s", str(e))
+            if return_weights:
+                return np.full(n_targets, 1e10), np.ones(n_targets)
+            else:
+                if is_scalar and n_targets == 1:
+                    return 1e10
+                return np.full(n_targets, 1e10)
+
+    def objective(params):
+        return _solve_and_evaluate(params, return_weights=False)
+
+    def objective_with_weights(params):
+        return _solve_and_evaluate(params, return_weights=True)
+
+    # Select and run optimization method
+    if is_just_identified:
+        if is_scalar:
+            result = _solve_scalar_root(
+                objective, initial_params[0], bounds, method, tol, maxiter
+            )
+        else:
+            result = _solve_vector_root(objective, initial_params, method, tol, maxiter)
+    else:
+        if is_scalar:
+            result = _solve_scalar_minimize(
+                objective_with_weights,
+                initial_params[0],
+                bounds,
+                method,
+                tol,
+                maxiter,
+            )
+        else:
+            result = _solve_vector_minimize(
+                objective_with_weights,
+                initial_params,
+                bounds,
+                method,
+                tol,
+                maxiter,
+            )
+
+    # Post-process: replace generic param names with descriptive names
+    result.parameters = {
+        name: float(val) for name, val in zip(param_names, result.parameters_array)
+    }
+
+    # Extract final solution
+    try:
+        final_solution, final_model = solution_fn(result.parameters_array)
+        if return_solution:
+            result.solution = _apply_transforms(final_solution)
+            result.model = final_model
+        else:
+            result.solution = None
+            result.model = None
+    except Exception as e:
+        logger.error("Error computing final solution: %s", str(e))
+        result.solution = None
+        result.model = None
+
+    # Override solver-reported success if residual is not actually small
+    if is_just_identified and result.success and result.residual > 10 * tol:
+        result.success = False
+        result.message = (
+            f"Solver reported converged but residual {result.residual:.6g} "
+            f"exceeds tolerance {tol:.6g}"
+        )
+
+    # Handle automatic saving or error reporting
+    if label is not None:
+        if result.success:
+            result.save(label, save_dir=save_dir)
+        else:
+            raise RuntimeError(
+                f"Calibration failed for label '{label}': {result.message}. "
+                "Parameters were not saved."
+            )
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+
 def calibrate(
     model,
     targets: List[Union[PointTarget, FunctionalTarget]],
@@ -723,107 +1069,33 @@ def calibrate(
         model, calib_params, spec, suppress_solver_output, calibrate_initial
     )
 
-    # Warm start: override initial values from a previously saved calibration
-    if initialize_from_saved:
-        _effective_load_label = load_label or label
-        if _effective_load_label is None:
-            raise ValueError(
-                "initialize_from_saved=True requires either 'label' or 'load_label' "
-                "to be set so that saved parameters can be located."
-            )
-        from ..utils.io import read_calibrated_params
-
-        try:
-            saved_params = read_calibrated_params(
-                _effective_load_label, save_dir=save_dir
-            )
-            for i, name in enumerate(param_names):
-                if name in saved_params:
-                    initial_params[i] = saved_params[name]
-            logger.info(
-                "Warm start: loaded %d/%d parameters from '%s'.",
-                sum(n in saved_params for n in param_names),
-                len(param_names),
-                _effective_load_label,
-            )
-        except FileNotFoundError:
-            logger.warning(
-                "initialize_from_saved=True but no saved file found for label '%s'. "
-                "Proceeding with original initial values.",
-                _effective_load_label,
-            )
-
     # Use auto-bounds from calib_params if user didn't pass explicit bounds
     if bounds is None:
         bounds = auto_bounds
 
-    n_params = len(initial_params)
+    # Build solution_fn: params -> (solution, model)
+    def solution_fn(params: np.ndarray):
+        mod, spec_from_params = param_to_model(params)
 
-    # For functional targets, we can't know the dimensionality until runtime
-    # So we do a conservative check here
-    min_targets = sum(
-        1 for t in targets if isinstance(t, (PointTarget, FunctionalTarget))
-    )
-
-    if n_params > min_targets and not any(
-        isinstance(t, FunctionalTarget) for t in targets
-    ):
-        # Only error if we have no functional targets (which could be vector-valued)
-        raise ValueError(
-            f"Problem is under-identified: {n_params} parameters "
-            f"but only {min_targets} targets. Add more targets or reduce parameters."
-        )
-
-    # Determine problem type
-    # We need to evaluate targets once to know the true dimensionality
-    is_scalar = n_params == 1
-
-    def _apply_transforms(solution: PathResult) -> PathResult:
-        if series_transforms is None and default_transform is None:
-            return solution
-        return solution.transform(
-            series_transforms=series_transforms,
-            default_transform=default_transform,
-        )
-
-    # Test evaluation to determine actual number of targets
-    try:
-        test_mod, test_spec = param_to_model(initial_params)
-
-        # Extract Nt from the spec
-        if isinstance(test_spec, DetSpec):
-            Nt = test_spec.Nt
-        elif isinstance(test_spec, LinearSpec):
-            Nt = test_spec.Nt
+        if isinstance(spec_from_params, DetSpec):
+            Nt_local = spec_from_params.Nt
+        elif isinstance(spec_from_params, LinearSpec):
+            Nt_local = spec_from_params.Nt
         else:
             raise ValueError(
                 "spec must be DetSpec or LinearSpec with Nt attribute. "
-                f"Got {type(test_spec)}"
+                f"Got {type(spec_from_params)}"
             )
 
-        # Quick solve to get dimensionality
         with _suppress_solver_output(suppress_solver_output):
-            if solver == "linear_irf":
-                test_solution = _compute_irf_from_linear_model(test_mod, test_spec)
-            elif solver == "linear_sequence":
-                from .linear import solve_sequence_linear
-
-                seq_result = solve_sequence_linear(
-                    test_spec, test_mod, Nt, **solver_kwargs
-                )
-                test_solution = (
-                    seq_result.splice(Nt)
-                    if seq_result.n_regimes > 1
-                    else seq_result.regimes[0]
-                )
-            else:  # deterministic
+            if solver == "deterministic":
                 from .deterministic import solve, solve_sequence
 
-                if isinstance(test_spec, DetSpec):
+                if isinstance(spec_from_params, DetSpec):
                     seq_result = solve_sequence(
-                        test_spec,
-                        test_mod,
-                        Nt,
+                        spec_from_params,
+                        mod,
+                        Nt_local,
                         tol=solver_kwargs.get("tol", 1e-8),
                         save_results=False,
                         **{
@@ -832,363 +1104,240 @@ def calibrate(
                             if k not in {"tol", "save_results"}
                         },
                     )
-                    test_solution = (
-                        seq_result.splice(Nt)
+                    sol = (
+                        seq_result.splice(Nt_local)
                         if seq_result.n_regimes > 1
                         else seq_result.regimes[0]
                     )
                 else:
-                    Z_path = np.zeros((Nt, len(test_mod.exog_list)))
-                    test_solution = solve(
-                        test_mod,
+                    Z_path = np.zeros((Nt_local, len(mod.exog_list)))
+                    sol = solve(
+                        mod,
                         Z_path,
                         tol=solver_kwargs.get("tol", 1e-8),
                         **{k: v for k, v in solver_kwargs.items() if k != "tol"},
                     )
 
-        test_solution = _apply_transforms(test_solution)
-        test_errors, _, _ = _evaluate_targets(targets, test_solution)
-        n_targets = len(test_errors)
+            elif solver == "linear_irf":
+                sol = _compute_irf_from_linear_model(mod, spec_from_params)
 
-    except Exception as e:
-        logger.warning(
-            "Could not determine target dimensionality from test evaluation: "
-            "%s. Assuming minimal targets.",
-            str(e),
-        )
-        n_targets = min_targets
+            elif solver == "linear_sequence":
+                from .linear import solve_sequence_linear
 
-    # Check for under-identification
-    if n_params > n_targets:
-        raise ValueError(
-            f"Problem is under-identified: {n_params} parameters "
-            f"but {n_targets} target values. Add more targets or reduce parameters."
-        )
-
-    is_just_identified = n_params == n_targets
-
-    logger.info(
-        "Calibration problem: %d params, %d targets, %s, %s",
-        n_params,
-        n_targets,
-        "just-identified" if is_just_identified else "over-identified",
-        "scalar" if is_scalar else "vector",
-    )
-
-    eval_count = 0
-
-    # Build unified objective function
-    def _solve_and_evaluate(params, return_weights=False):
-        """
-        Compute target errors (and optionally weights) for given parameters.
-        """
-        params = np.atleast_1d(params)
-
-        # Enforce parameter bounds before running the solver
-        if bounds is not None:
-            for val, (lo, hi) in zip(params, bounds):
-                if val < lo or val > hi:
-                    if return_weights:
-                        return np.full(n_targets, 1e10), np.ones(n_targets)
-                    else:
-                        if is_scalar and n_targets == 1:
-                            return 1e10
-                        return np.full(n_targets, 1e10)
-
-        try:
-            # Get model and spec from parameters
-            mod, spec_from_params = param_to_model(params)
-
-            # Extract Nt from the spec
-            if isinstance(spec_from_params, DetSpec):
-                Nt_local = spec_from_params.Nt
-            elif isinstance(spec_from_params, LinearSpec):
-                Nt_local = spec_from_params.Nt
-            else:
-                raise ValueError("spec must be DetSpec or LinearSpec with Nt attribute")
-
-            # Solve using specified solver
-            with _suppress_solver_output(suppress_solver_output):
-                if solver == "deterministic":
-                    from .deterministic import solve, solve_sequence
-
-                    if isinstance(spec_from_params, DetSpec):
-                        # Use sequence solver if DetSpec provided
-                        seq_result = solve_sequence(
-                            spec_from_params,
-                            mod,
-                            Nt_local,
-                            tol=solver_kwargs.get("tol", 1e-8),
-                            save_results=False,
-                            **{
-                                k: v
-                                for k, v in solver_kwargs.items()
-                                if k not in {"tol", "save_results"}
-                            },
-                        )
-                        solution = (
-                            seq_result.splice(Nt_local)
-                            if seq_result.n_regimes > 1
-                            else seq_result.regimes[0]
-                        )
-                    else:
-                        # Simple deterministic solve
-                        Z_path = np.zeros((Nt_local, len(mod.exog_list)))
-                        solution = solve(
-                            mod,
-                            Z_path,
-                            tol=solver_kwargs.get("tol", 1e-8),
-                            **{k: v for k, v in solver_kwargs.items() if k != "tol"},
-                        )
-
-                elif solver == "linear_irf":
-                    # Compute IRF using existing LinearModel machinery
-                    solution = _compute_irf_from_linear_model(mod, spec_from_params)
-
-                elif solver == "linear_sequence":
-                    from .linear import solve_sequence_linear
-
-                    if not isinstance(spec_from_params, DetSpec):
-                        raise ValueError(
-                            "linear_sequence solver requires DetSpec specification"
-                        )
-
-                    seq_result = solve_sequence_linear(
-                        spec_from_params,
-                        mod,
-                        Nt_local,
-                        **solver_kwargs,
-                    )
-                    solution = (
-                        seq_result.splice(Nt_local)
-                        if seq_result.n_regimes > 1
-                        else seq_result.regimes[0]
-                    )
-
-                else:
+                if not isinstance(spec_from_params, DetSpec):
                     raise ValueError(
-                        f"Unknown solver: {solver}. Must be 'deterministic', "
-                        "'linear_irf', or 'linear_sequence'."
+                        "linear_sequence solver requires DetSpec specification"
                     )
-
-            # Evaluate targets - returns both errors and weights
-            transformed_solution = _apply_transforms(solution)
-            errors, target_weights, details = _evaluate_targets(
-                targets, transformed_solution
-            )
-
-            nonlocal eval_count
-            eval_count += 1
-            if progress_every and eval_count % progress_every == 0:
-                params_array = np.atleast_1d(params)
-                params_dict = {
-                    name: float(val)
-                    for name, val in zip(param_names, params_array, strict=False)
-                }
-                residual = np.linalg.norm(errors)
-                if return_weights:
-                    weighted_errors = target_weights * (np.asarray(errors) ** 2)
-                    residual = float(np.sqrt(np.sum(weighted_errors)))
-                logger.info(
-                    "Calibration eval %d: params=%s residual=%g",
-                    eval_count,
-                    params_dict,
-                    residual,
+                seq_result = solve_sequence_linear(
+                    spec_from_params,
+                    mod,
+                    Nt_local,
+                    **solver_kwargs,
+                )
+                sol = (
+                    seq_result.splice(Nt_local)
+                    if seq_result.n_regimes > 1
+                    else seq_result.regimes[0]
                 )
 
-                if verbose:
-                    logger.info("  Target details:")
-                    for d in details:
-                        if d["type"] == "point":
-                            logger.info(
-                                "    - %s at t=%d: model=%g, target=%g, error=%g (weight=%g)",
-                                d["variable"],
-                                d["time"],
-                                d["model_value"],
-                                d["target_value"],
-                                d["error"],
-                                d["weight"],
-                            )
-                        else:  # functional
-                            err_str = (
-                                f"{d['errors'][0]:g}"
-                                if len(d["errors"]) == 1
-                                else str([f"{e:g}" for e in d["errors"]])
-                            )
-                            weight_str = (
-                                f"{d['weights'][0]:g}"
-                                if len(d["weights"]) == 1
-                                else str([f"{w:g}" for w in d["weights"]])
-                            )
-                            logger.info(
-                                "    - %s: error=%s (weight=%s)",
-                                d["description"],
-                                err_str,
-                                weight_str,
-                            )
-
-            # Return based on what's requested
-            if return_weights:
-                return errors, target_weights
             else:
-                # For root-finding, return scalar for scalar problems
-                if is_scalar and len(errors) == 1:
-                    return float(errors[0])
-                return errors
+                raise ValueError(
+                    f"Unknown solver: {solver}. Must be 'deterministic', "
+                    "'linear_irf', or 'linear_sequence'."
+                )
 
-        except Exception as e:
-            logger.error("Error in objective function: %s", str(e))
-            # Return large error on failure
-            if return_weights:
-                return np.full(n_targets, 1e10), np.ones(n_targets)
-            else:
-                if is_scalar and n_targets == 1:
-                    return 1e10
-                return np.full(n_targets, 1e10)
+        return sol, mod
 
-    # Wrapper for root-finding (no weights)
-    def objective(params):
-        """Compute target errors for root-finding."""
-        return _solve_and_evaluate(params, return_weights=False)
+    return _run_calibration_loop(
+        solution_fn=solution_fn,
+        initial_params=initial_params,
+        bounds=bounds,
+        param_names=param_names,
+        targets=targets,
+        series_transforms=series_transforms,
+        default_transform=default_transform,
+        method=method,
+        tol=tol,
+        maxiter=maxiter,
+        suppress_solver_output=suppress_solver_output,
+        return_solution=return_solution,
+        progress_every=progress_every,
+        verbose=verbose,
+        label=label,
+        save_dir=save_dir,
+        initialize_from_saved=initialize_from_saved,
+        load_label=load_label,
+    )
 
-    # Wrapper for minimization (with weights)
-    def objective_with_weights(params):
-        """Compute target errors and weights for minimization."""
-        return _solve_and_evaluate(params, return_weights=True)
 
-    # Select and run optimization method
-    if is_just_identified:
-        if is_scalar:
-            # Scalar root finding
-            result = _solve_scalar_root(
-                objective, initial_params[0], bounds, method, tol, maxiter
+def calibrate_custom(
+    model,
+    targets: List[Union[PointTarget, FunctionalTarget]],
+    calib_params: list[ModelParam],
+    solution_builder: Callable,
+    *,
+    bounds: Optional[List[tuple]] = None,
+    calibrate_initial: bool = True,
+    suppress_solver_output: bool = True,
+    series_transforms: Optional[
+        Mapping[str, SeriesTransform | Mapping[str, Any]]
+    ] = None,
+    default_transform: Optional[SeriesTransform | Mapping[str, Any]] = None,
+    method: Optional[str] = None,
+    tol: float = 1e-6,
+    maxiter: int = 100,
+    return_solution: bool = False,
+    progress_every: int = 1,
+    verbose: bool = False,
+    label: Optional[str] = None,
+    save_dir: Optional[Union[Path, str]] = None,
+    initialize_from_saved: bool = False,
+    load_label: Optional[str] = None,
+) -> CalibrationResult:
+    """
+    Calibrate model parameters using a caller-supplied solution builder.
+
+    Provides the same parameter handling, bounds, warm starts, optimizer
+    selection, weighting, progress logging, and result packaging as
+    ``calibrate()``, but decouples the candidate solution construction from
+    the built-in solvers.  This is the right entry point for workflows where
+    the target moments are computed by something other than a deterministic or
+    linear path solve—for example, a Kalman filter/smoother, a simulated-moments
+    estimator, or a custom stochastic simulation.
+
+    Only ``ModelParam`` is supported in ``calib_params``; parameter changes
+    trigger ``update_copy`` + ``solve_steady`` + ``linearize`` (with caching).
+    For workflows that also need shock or regime parameters, use ``calibrate()``
+    with a ``FunctionalTarget`` that runs your custom procedure internally.
+
+    Parameters
+    ----------
+    model : Model
+        Base model instance to calibrate.
+    targets : list of PointTarget or FunctionalTarget
+        Target specifications to match.  ``PointTarget`` requires that
+        ``solution_builder`` returns an object with a ``PathResult``-compatible
+        interface (``UX``, ``var_names``, etc.); otherwise a runtime error will
+        occur.  ``FunctionalTarget`` works with any return type.
+    calib_params : list of ModelParam
+        Declarative parameter specifications.  Only ``ModelParam`` is accepted;
+        passing ``ShockParam`` or ``RegimeParam`` raises ``TypeError``.
+    solution_builder : callable
+        ``(model) -> Any``.  Called at each optimizer iteration with the
+        candidate model (already solved and linearized).  The return value is
+        passed directly to the target evaluation functions.  Use
+        ``functools.partial`` or a closure to capture any additional context
+        (observed data, configuration, etc.) that the builder needs.
+    bounds : list of tuples, optional
+        Parameter bounds.  If None, uses bounds from ``calib_params``.
+    calibrate_initial : bool, default True
+        Whether to apply calibration rules when solving candidate steady states.
+    suppress_solver_output : bool, default True
+        If True, suppress logging from the steady-state and linearization
+        solvers during calibration evaluations.
+    series_transforms : dict[str, SeriesTransform or dict], optional
+        Per-series transform specifications applied to the solution before
+        evaluating targets.
+    default_transform : SeriesTransform or dict, optional
+        Transform applied to any series without an explicit entry in
+        ``series_transforms``.
+    method : str, optional
+        Optimization method.  If None, automatically selected based on problem
+        structure.
+    tol : float, default 1e-6
+        Convergence tolerance.
+    maxiter : int, default 100
+        Maximum number of iterations.
+    return_solution : bool, default False
+        If True, return the (transformed) solution and model in the result.
+    progress_every : int, default 1
+        Log progress every N evaluations.  Set to 0 to disable.
+    verbose : bool, default False
+        If True, log detailed per-target information at each logged evaluation.
+    label : str, optional
+        Label for auto-saving results.  On success: saves parameters to disk.
+        On failure: raises ``RuntimeError``.
+    save_dir : Path | str, optional
+        Directory for auto-saved results.
+    initialize_from_saved : bool, default False
+        If True, load previously saved calibrated parameters as initial guesses.
+        Requires ``label`` or ``load_label`` to be set.
+    load_label : str, optional
+        Label to load saved parameters from.  Falls back to ``label`` if not
+        provided.
+
+    Returns
+    -------
+    CalibrationResult
+        Result object with fitted parameters, diagnostics, and solution.
+
+    Examples
+    --------
+    >>> import functools
+    >>> from equilibrium import calibrate_custom, ModelParam, FunctionalTarget
+    >>>
+    >>> def run_smoother(model, observed_data):
+    ...     smoothed = kalman_smooth(model, observed_data)
+    ...     return smoothed
+    >>>
+    >>> result = calibrate_custom(
+    ...     model=base_model,
+    ...     targets=[
+    ...         FunctionalTarget(
+    ...             func=lambda sol: sol.moments - data_moments,
+    ...             description="Match regression moments",
+    ...         )
+    ...     ],
+    ...     calib_params=[ModelParam("bet", initial=0.95, bounds=(0.90, 0.99))],
+    ...     solution_builder=functools.partial(run_smoother, observed_data=my_data),
+    ... )
+    """
+    if len(targets) == 0:
+        raise ValueError("At least one target must be specified")
+
+    if len(calib_params) == 0:
+        raise ValueError("calib_params must not be empty")
+
+    for p in calib_params:
+        if not isinstance(p, ModelParam):
+            raise TypeError(
+                f"calibrate_custom only supports ModelParam in calib_params; "
+                f"got {type(p).__name__}. "
+                f"For ShockParam or RegimeParam, use calibrate()."
             )
-        else:
-            # Vector root finding
-            result = _solve_vector_root(objective, initial_params, method, tol, maxiter)
-    else:
-        # Over-identified: use minimization with weights
-        if is_scalar:
-            # Scalar minimization
-            result = _solve_scalar_minimize(
-                objective_with_weights,
-                initial_params[0],
-                bounds,
-                method,
-                tol,
-                maxiter,
-            )
-        else:
-            # Vector minimization
-            result = _solve_vector_minimize(
-                objective_with_weights,
-                initial_params,
-                bounds,
-                method,
-                tol,
-                maxiter,
-            )
 
-    # Post-process: replace generic param names with descriptive names
-    result.parameters = {
-        name: float(val) for name, val in zip(param_names, result.parameters_array)
-    }
+    model_fn, initial_params, auto_bounds, param_names = _build_model_updater(
+        model, calib_params, suppress_solver_output, calibrate_initial
+    )
 
-    # Extract final solution using the same unified evaluation function
-    try:
-        final_model, final_spec = param_to_model(result.parameters_array)
+    if bounds is None:
+        bounds = auto_bounds
 
-        # Extract Nt from the spec
-        if isinstance(final_spec, DetSpec):
-            Nt_final = final_spec.Nt
-        elif isinstance(final_spec, LinearSpec):
-            Nt_final = final_spec.Nt
-        else:
-            raise ValueError("spec must be DetSpec or LinearSpec with Nt attribute")
+    def solution_fn(params: np.ndarray):
+        mod = model_fn(params)
+        sol = solution_builder(mod)
+        return sol, mod
 
-        if return_solution:
-            with _suppress_solver_output(suppress_solver_output):
-                if solver == "deterministic":
-                    from .deterministic import solve, solve_sequence
-
-                    if isinstance(final_spec, DetSpec):
-                        seq_result = solve_sequence(
-                            final_spec,
-                            final_model,
-                            Nt_final,
-                            tol=solver_kwargs.get("tol", 1e-8),
-                            save_results=False,
-                            **{
-                                k: v
-                                for k, v in solver_kwargs.items()
-                                if k not in {"tol", "save_results"}
-                            },
-                        )
-                        final_solution = (
-                            seq_result.splice(Nt_final)
-                            if seq_result.n_regimes > 1
-                            else seq_result.regimes[0]
-                        )
-                    else:
-                        Z_path = np.zeros((Nt_final, len(final_model.exog_list)))
-                        final_solution = solve(
-                            final_model,
-                            Z_path,
-                            tol=solver_kwargs.get("tol", 1e-8),
-                            **{k: v for k, v in solver_kwargs.items() if k != "tol"},
-                        )
-
-                elif solver == "linear_irf":
-                    final_solution = _compute_irf_from_linear_model(
-                        final_model, final_spec
-                    )
-
-                elif solver == "linear_sequence":
-                    from .linear import solve_sequence_linear
-
-                    seq_result = solve_sequence_linear(
-                        final_spec,
-                        final_model,
-                        Nt_final,
-                        **solver_kwargs,
-                    )
-                    final_solution = (
-                        seq_result.splice(Nt_final)
-                        if seq_result.n_regimes > 1
-                        else seq_result.regimes[0]
-                    )
-
-            result.solution = _apply_transforms(final_solution)
-            result.model = final_model
-        else:
-            result.solution = None
-            result.model = None
-
-    except Exception as e:
-        logger.error("Error computing final solution: %s", str(e))
-        result.solution = None
-        result.model = None
-
-    # Override solver-reported success if residual is not actually small
-    # This only applies to just-identified problems where we expect a zero residual
-    if is_just_identified and result.success and result.residual > 10 * tol:
-        result.success = False
-        result.message = (
-            f"Solver reported converged but residual {result.residual:.6g} "
-            f"exceeds tolerance {tol:.6g}"
-        )
-
-    # Handle automatic saving or error reporting
-    if label is not None:
-        if result.success:
-            result.save(label, save_dir=save_dir)
-        else:
-            raise RuntimeError(
-                f"Calibration failed for label '{label}': {result.message}. "
-                "Parameters were not saved."
-            )
-
-    return result
+    return _run_calibration_loop(
+        solution_fn=solution_fn,
+        initial_params=initial_params,
+        bounds=bounds,
+        param_names=param_names,
+        targets=targets,
+        series_transforms=series_transforms,
+        default_transform=default_transform,
+        method=method,
+        tol=tol,
+        maxiter=maxiter,
+        suppress_solver_output=suppress_solver_output,
+        return_solution=return_solution,
+        progress_every=progress_every,
+        verbose=verbose,
+        label=label,
+        save_dir=save_dir,
+        initialize_from_saved=initialize_from_saved,
+        load_label=load_label,
+    )
 
 
 def _count_targets(targets: List[Union[PointTarget, FunctionalTarget]]) -> int:
@@ -1607,7 +1756,7 @@ def _solve_vector_minimize(
 
     # Choose method
     if method is None:
-        method = "L-BFGS-B" if bounds is not None else "Nelder-Mead"
+        method = "L-BFGS-B"
 
     try:
         sol = opt.minimize(
