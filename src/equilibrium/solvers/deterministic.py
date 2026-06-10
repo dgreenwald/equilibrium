@@ -688,7 +688,7 @@ def _solve_lbj_internal(
     if guess_method == "constant":
         UX_guess = np.tile(ux_init, (Nt, 1))
     elif guess_method == "linear":
-        UX_guess = solve_linear_path(mod, Z, ux_init)
+        UX_guess = solve_linear_path(mod, Z, ux_init[mod.N["u"]:])
     else:
         raise ValueError(
             f"Unknown guess_method: {guess_method}. Must be 'linear' or 'constant'."
@@ -760,7 +760,7 @@ def _solve_sparse_internal(
     if guess_method == "constant":
         UX_guess = np.tile(ux_init, (Nt, 1))
     elif guess_method == "linear":
-        UX_guess = solve_linear_path(mod, Z, ux_init)
+        UX_guess = solve_linear_path(mod, Z, ux_init[mod.N["u"]:])
     else:
         raise ValueError(
             f"Unknown guess_method: {guess_method}. Must be 'linear' or 'constant'."

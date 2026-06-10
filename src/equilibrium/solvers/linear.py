@@ -152,21 +152,20 @@ def solve_sequence_linear(
 
     regime_results = []
     current_mod = base_mod
+    N_u = base_mod.N["u"]
     # Use z_init from DetSpec if not provided explicitly, otherwise use parameter
     if z_init is None:
         current_z_init = det_spec.z_init
     else:
         current_z_init = z_init
-    # Use ux_init from DetSpec if not provided explicitly, otherwise use parameter
+    # Extract x portion of initial conditions (u is determined by policy function)
     if ux_init is None:
         if det_spec.ux_init is not None:
-            current_ux_init = np.asarray(det_spec.ux_init)
+            current_x_init = np.asarray(det_spec.ux_init)[N_u:]
         else:
-            current_ux_init = np.concatenate(
-                [base_mod.steady_components["u"], base_mod.steady_components["x"]]
-            )
+            current_x_init = base_mod.steady_components["x"].copy()
     else:
-        current_ux_init = np.asarray(ux_init)
+        current_x_init = np.asarray(ux_init)[N_u:]
     prev_preset_par = None
     start_time = 0
     should_save_regime_steady = save_regime_steady or save_regime_steady_tex
@@ -242,7 +241,7 @@ def solve_sequence_linear(
         )
 
         # Compute the UX path using the linear model
-        UX = solve_linear_path(current_mod, Z_path, current_ux_init)
+        UX = solve_linear_path(current_mod, Z_path, current_x_init)
 
         # Compute linearized intermediate variables
         Y = compute_linear_intermediates(current_mod, UX, Z_path)
@@ -256,7 +255,7 @@ def solve_sequence_linear(
                 else:
                     z_init_for_y = np.asarray(current_z_init)
                 y_init_regime = _compute_initial_intermediates(
-                    base_mod, current_ux_init, z_init_for_y
+                    base_mod, UX[0], z_init_for_y
                 )
             elif hasattr(current_mod, "var_lists"):
                 y_names = current_mod.var_lists.get("intermediate", [])
@@ -322,7 +321,7 @@ def solve_sequence_linear(
                 )
 
             current_z_init = Z_path[transition_time, :]
-            current_ux_init = UX[transition_time, :]
+            current_x_init = UX[transition_time, N_u:]
             start_time = det_spec.time_list[regime]
 
         # Remember current params for comparison
@@ -446,15 +445,14 @@ def compute_linear_intermediates(mod, UX, Z, deviations=False):
     return Y
 
 
-def solve_linear_path(mod, Z_path, ux_init=None):
+def solve_linear_path(mod, Z_path, x_init=None):
     """
     Compute the UX path using the linearized model dynamics.
 
-    This function applies the linear policy and transition functions:
-        u = u_ss + G_x @ x_hat + G_z @ z_hat
-        x_new = x_ss + H_x @ x_hat + H_z @ z_hat
-
-    where x_hat and z_hat are deviations from steady state.
+    Timing convention (matches linearize_klein state-space):
+        z_t = Phi @ z_{t-1} + impact @ eps_t
+        x_t = H_x @ x_{t-1} + H_z @ z_{t-1}
+        u_t = G_x @ x_t   + G_z @ z_t
 
     Parameters
     ----------
@@ -463,8 +461,8 @@ def solve_linear_path(mod, Z_path, ux_init=None):
         performed automatically.
     Z_path : array-like, shape (Nt, N_z)
         Exogenous variables path.
-    ux_init : array-like, shape (N_ux,), optional
-        Initial control and state variables. If None, uses steady state values.
+    x_init : array-like, shape (N_x,), optional
+        Initial state variables. If None, uses steady state values.
 
     Returns
     -------
@@ -482,57 +480,45 @@ def solve_linear_path(mod, Z_path, ux_init=None):
         logger.info("Linearization not found, running linearize()")
         mod.linearize()
 
-    # Set default ux_init to steady state if not provided
-    if ux_init is None:
-        ux_init = np.concatenate(
-            [mod.steady_components["u"], mod.steady_components["x"]]
-        )
+    if x_init is None:
+        x_init = mod.steady_components["x"]
+    x_init = np.asarray(x_init)
+
     Nt = Z_path.shape[0]
     N_u = mod.N["u"]
     N_x = mod.N["x"]
     N_ux = N_u + N_x
 
-    # Get steady state values
     u_ss = mod.steady_components["u"]
     x_ss = mod.steady_components["x"]
     z_ss = mod.steady_components["z"]
 
-    # Get linear model matrices
     G_x = mod.linear_mod.G_x
     G_z = mod.linear_mod.G_z
     H_x = mod.linear_mod.H_x
     H_z = mod.linear_mod.H_z
 
-    # Initialize output array
     UX = np.zeros((Nt, N_ux))
 
-    # Split initial ux into u and x
-    u_init, x_init = np.split(ux_init, np.array([N_u]))
+    # t=0: u_0 is on the policy function given (x_0, z_0)
+    x_0_hat = x_init - x_ss
+    z_0_hat = Z_path[0, :] - z_ss
+    UX[0, :N_u] = u_ss + G_x @ x_0_hat + G_z @ z_0_hat
+    UX[0, N_u:] = x_init
 
-    # Set initial values
-    UX[0, :] = ux_init
-
-    # Forward iteration starting from initial conditions
     x_t = x_init.copy()
 
     for tt in range(1, Nt):
-        # Compute deviations from steady state
-        x_hat = x_t - x_ss
-        z_hat = Z_path[tt, :] - z_ss
+        x_prev_hat = x_t - x_ss
+        z_prev_hat = Z_path[tt - 1, :] - z_ss
+        z_curr_hat = Z_path[tt, :] - z_ss
 
-        # Apply linear transition and policy functions
-        x_new_hat = H_x @ x_hat + H_z @ z_hat
-        u_hat = G_x @ x_hat + G_z @ z_hat
+        x_new_hat = H_x @ x_prev_hat + H_z @ z_prev_hat
+        u_new_hat = G_x @ x_new_hat + G_z @ z_curr_hat
 
-        # Convert back to levels
-        x_new = x_ss + x_new_hat
-        u_new = u_ss + u_hat
+        UX[tt, :N_u] = u_ss + u_new_hat
+        UX[tt, N_u:] = x_ss + x_new_hat
 
-        # Store in UX
-        UX[tt, :N_u] = u_new
-        UX[tt, N_u:] = x_new
-
-        # Update state for next iteration
-        x_t = x_new
+        x_t = x_ss + x_new_hat
 
     return UX
