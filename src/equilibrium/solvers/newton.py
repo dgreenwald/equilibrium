@@ -48,38 +48,23 @@ def gradient(f, x, args=None, kwargs=None, step=1e-5, two_sided=True, f_val=None
     if (not two_sided) and (f_val is None):
         f_val = f(x, *args, **kwargs)
 
-    # Work on a mutable copy to avoid in-place edits on JAX arrays
-    x = np.array(x).copy()
-    grad = None
+    x = np.array(x)
+    columns = []
     for ii in range(len(x)):
-        x[ii] += step
-        f_hi = f(x, *args, **kwargs)
+        x_hi = x.at[ii].add(step)
+        f_hi = f(x_hi, *args, **kwargs)
 
         if two_sided:
-            x[ii] -= 2.0 * step
-            f_lo = f(x, *args, **kwargs)
-            x[ii] += step
-
-            df_i = np.array(f_hi - f_lo) / (2.0 * step)
-
+            x_lo = x.at[ii].add(-step)
+            f_lo = f(x_lo, *args, **kwargs)
+            df_i = np.atleast_1d(np.array(f_hi - f_lo) / (2.0 * step))
         else:
-            x[ii] -= step
+            df_i = np.atleast_1d(np.array(f_hi - f_val) / step)
 
-            df_i = np.array(f_hi - f_val) / step
+        columns.append(df_i)
 
-        if grad is None:
-            if df_i.shape == ():
-                nrows = 1
-            else:
-                nrows = len(df_i)
-
-            # Jacobian shape (n_outputs, n_inputs)
-            grad = np.zeros((nrows, len(x)))
-
-        # Each column corresponds to derivative w.r.t. x[ii]
-        grad[:, ii] = df_i
-
-    return grad
+    # Stack columns into Jacobian: shape (n_outputs, n_inputs)
+    return np.stack(columns, axis=1)
 
 
 def root(
@@ -187,7 +172,7 @@ def root(
             x_new = x + step
             f_val_new = fun(x_new, *args, **kwargs)
             dist_new = np.linalg.norm(f_val_new)
-            step *= 0.5
+            step = step * 0.5
 
         if dist_new < dist:
             x = x_new

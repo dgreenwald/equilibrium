@@ -1641,6 +1641,37 @@ def _solve_vector_root(
     if method is None:
         method = "hybr"  # Hybrid Powell method
 
+    if method == "newton":
+        from . import newton
+
+        try:
+            sol = newton.root(
+                func,
+                x0,
+                tol=tol,
+                max_iterations=maxiter,
+                verbose=False,
+            )
+            params = {f"param_{i}": val for i, val in enumerate(sol.x)}
+            return CalibrationResult(
+                parameters=params,
+                parameters_array=np.array(sol.x),
+                success=sol.success,
+                residual=float(sol.dist),
+                message="" if sol.success else getattr(sol, "failure_cause", "failed"),
+                method="newton",
+            )
+        except Exception as e:
+            logger.error("Newton root finding failed: %s", str(e))
+            params = {f"param_{i}": val for i, val in enumerate(x0)}
+            return CalibrationResult(
+                parameters=params,
+                parameters_array=x0,
+                success=False,
+                message=str(e),
+                method="newton",
+            )
+
     # hybr and lm are MINPACK wrappers that use maxfev, not maxiter
     iter_key = "maxfev" if method in _ROOT_MAXFEV_METHODS else "maxiter"
 
