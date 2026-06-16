@@ -25,6 +25,7 @@ def solve_sequence_linear(
     Nt,
     z_init=None,
     ux_init=None,
+    ux_init_mode: str = "levels",
     y_init=None,
     calibrate_initial=True,
     recalibrate_regimes=False,
@@ -73,7 +74,14 @@ def solve_sequence_linear(
         defaults to zeros.
     ux_init : array-like, optional
         Initial values for endogenous states and controls for the first regime.
-        If None, defaults to steady state.
+        Interpreted according to ``ux_init_mode``. Only the state slice is used
+        for linear propagation; controls are recomputed from the linear policy
+        function. If None, defaults to steady state.
+    ux_init_mode : {"levels", "deviations"}, default "levels"
+        Interpretation of ``ux_init`` and ``det_spec.ux_init``. If "levels",
+        initial values are absolute variable values. If "deviations", initial
+        values are deviations from the first regime model's steady state and
+        are converted to levels before solving.
     y_init : array-like, optional
         Initial values for intermediate variables for the first regime. If None,
         they are computed from the initial model when using the steady state.
@@ -153,19 +161,18 @@ def solve_sequence_linear(
     regime_results = []
     current_mod = base_mod
     N_u = base_mod.N["u"]
+    if ux_init_mode not in {"levels", "deviations"}:
+        raise ValueError(
+            "ux_init_mode must be one of {'levels', 'deviations'}, "
+            f"got {ux_init_mode!r}."
+        )
+
     # Use z_init from DetSpec if not provided explicitly, otherwise use parameter
     if z_init is None:
         current_z_init = det_spec.z_init
     else:
         current_z_init = z_init
-    # Extract x portion of initial conditions (u is determined by policy function)
-    if ux_init is None:
-        if det_spec.ux_init is not None:
-            current_x_init = np.asarray(det_spec.ux_init)[N_u:]
-        else:
-            current_x_init = base_mod.steady_components["x"].copy()
-    else:
-        current_x_init = np.asarray(ux_init)[N_u:]
+    current_x_init = None
     prev_preset_par = None
     start_time = 0
     should_save_regime_steady = save_regime_steady or save_regime_steady_tex
@@ -186,6 +193,25 @@ def solve_sequence_linear(
             [mod_for_init.params[key] for key in mod_for_init.var_lists["params"]]
         )
         return mod_for_init.intermediates(u_init, x_init, z_init_for_y, params)
+
+    def _normalize_ux_init(mod_for_init, ux_values):
+        ux_arr = np.asarray(ux_values)
+        expected_shape = (mod_for_init.N["u"] + mod_for_init.N["x"],)
+        if ux_arr.shape != expected_shape:
+            raise ValueError(
+                f"ux_init must have shape {expected_shape}, got {ux_arr.shape}."
+            )
+
+        if ux_init_mode == "levels":
+            return ux_arr
+
+        ux_ss = np.concatenate(
+            [
+                mod_for_init.steady_components["u"],
+                mod_for_init.steady_components["x"],
+            ]
+        )
+        return ux_ss + ux_arr
 
     for regime in range(det_spec.n_regimes):
         # Get preset parameters for this regime.
@@ -213,6 +239,22 @@ def solve_sequence_linear(
             # First regime with no parameter changes - use baseline copy
             # Note: base_mod's steady state and linearization have already been done by the checks before the loop
             current_mod = base_mod
+
+        if regime == 0:
+            # Extract x portion of initial conditions. Controls are determined
+            # by the policy function, but accepting full UX keeps the API
+            # aligned with deterministic.solve_sequence.
+            if ux_init is None:
+                if det_spec.ux_init is not None:
+                    ux_init_levels = _normalize_ux_init(
+                        current_mod, det_spec.ux_init
+                    )
+                    current_x_init = ux_init_levels[N_u:]
+                else:
+                    current_x_init = current_mod.steady_components["x"].copy()
+            else:
+                ux_init_levels = _normalize_ux_init(current_mod, ux_init)
+                current_x_init = ux_init_levels[N_u:]
 
         if should_save_regime_steady:
             regime_name = regime_labels[regime] if regime_labels is not None else None

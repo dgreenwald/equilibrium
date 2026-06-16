@@ -211,6 +211,81 @@ class TestSolveSequenceLinear:
 
         assert np.allclose(result.regimes[0].Y[0, :], y_init)
 
+    def test_ux_init_deviations_matches_equivalent_levels(self):
+        """Test that ux_init deviations are converted to equivalent levels."""
+        mod = set_model()
+        mod.solve_steady(calibrate=True)
+        mod.linearize()
+
+        spec = DetSpec(n_regimes=1)
+        Nt = 8
+
+        ux_ss = np.concatenate(
+            [mod.steady_components["u"], mod.steady_components["x"]]
+        )
+        ux_dev = np.array([0.2, 0.05])
+
+        result_levels = linear.solve_sequence_linear(
+            spec,
+            mod,
+            Nt,
+            ux_init=ux_ss + ux_dev,
+        )
+        result_deviations = linear.solve_sequence_linear(
+            spec,
+            mod,
+            Nt,
+            ux_init=ux_dev,
+            ux_init_mode="deviations",
+        )
+
+        np.testing.assert_allclose(
+            result_deviations.regimes[0].UX,
+            result_levels.regimes[0].UX,
+        )
+
+    def test_ux_init_deviations_use_first_regime_steady_state(self):
+        """Test deviation-mode ux_init is anchored to regime-0 steady state."""
+        mod = set_model()
+        mod.solve_steady(calibrate=True)
+        mod.linearize()
+
+        bet_counterfactual = mod.params["bet"] + 0.01
+        spec = DetSpec(n_regimes=1)
+        spec.add_regime(0, preset_par_regime={"bet": bet_counterfactual})
+
+        counterfactual = mod.update_copy(params={"bet": bet_counterfactual})
+        counterfactual.solve_steady(calibrate=False, display=False)
+
+        ux_dev = np.array([0.0, 0.05])
+        result = linear.solve_sequence_linear(
+            spec,
+            mod,
+            Nt=8,
+            ux_init=ux_dev,
+            ux_init_mode="deviations",
+        )
+
+        expected_x0 = counterfactual.steady_components["x"] + ux_dev[mod.N["u"] :]
+        np.testing.assert_allclose(result.regimes[0].UX[0, mod.N["u"] :], expected_x0)
+
+    def test_ux_init_mode_rejects_unknown_value(self):
+        """Test that unknown ux_init modes fail before solving."""
+        mod = set_model()
+        mod.solve_steady(calibrate=True)
+        mod.linearize()
+
+        spec = DetSpec(n_regimes=1)
+
+        with pytest.raises(ValueError, match="ux_init_mode"):
+            linear.solve_sequence_linear(
+                spec,
+                mod,
+                Nt=8,
+                ux_init=np.zeros(mod.N["u"] + mod.N["x"]),
+                ux_init_mode="bad",
+            )
+
     def test_empty_spec_error(self):
         """Test that solve_sequence_linear raises error with empty DetSpec."""
         mod = set_model()
