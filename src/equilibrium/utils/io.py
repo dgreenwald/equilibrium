@@ -744,12 +744,18 @@ def load_model_irfs(
         ux_key = f"UX_{shock_name}"
         z_key = f"Z_{shock_name}"
         y_key = f"Y_{shock_name}"
+        ux_ss_key = f"UX_ss_{shock_name}"
+        z_ss_key = f"Z_ss_{shock_name}"
+        y_ss_key = f"Y_ss_{shock_name}"
 
         if ux_key in data:
             # New format: load UX, Z, Y directly
             UX = data[ux_key]
             Z = data.get(z_key, np.zeros((UX.shape[0], 0)))
             Y = data.get(y_key, None)
+            UX_ss = data.get(ux_ss_key, None)
+            Z_ss = data.get(z_ss_key, None)
+            Y_ss = data.get(y_ss_key, None)
             y_names_actual = metadata.get("y_names", []) if Y is not None else []
         else:
             # Old format: extract from irfs tensor
@@ -762,12 +768,18 @@ def load_model_irfs(
             else:
                 Z = np.zeros((shock_irf.shape[0], 0))
             Y = None
+            UX_ss = None
+            Z_ss = None
+            Y_ss = None
             y_names_actual = []
 
         irf_result = IrfResult(
             UX=UX,
             Z=Z,
             Y=Y,
+            UX_ss=np.asarray(UX_ss) if UX_ss is not None else None,
+            Z_ss=np.asarray(Z_ss) if Z_ss is not None else None,
+            Y_ss=np.asarray(Y_ss) if Y_ss is not None else None,
             model_label=model_label,
             var_names=ux_names,
             exog_names=exog_names,

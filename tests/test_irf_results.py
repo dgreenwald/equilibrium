@@ -10,8 +10,9 @@ import jax
 import numpy as np
 import pytest
 
-from equilibrium import IrfResult, Model, PathResult
+from equilibrium import DeterministicResult, IrfResult, Model, PathResult
 from equilibrium.plot import plot_irf_results
+from equilibrium.solvers.results import SequenceResult
 
 jax.config.update("jax_enable_x64", True)
 
@@ -147,11 +148,17 @@ class TestPathResult:
         UX = np.random.randn(10, 2)
         Z = np.random.randn(10, 1)
         Y = np.random.randn(10, 3)
+        UX_ss = np.array([1.0, 2.0])
+        Z_ss = np.array([0.0])
+        Y_ss = np.array([3.0, 4.0, 5.0])
 
         result = PathResult(
             UX=UX,
             Z=Z,
             Y=Y,
+            UX_ss=UX_ss,
+            Z_ss=Z_ss,
+            Y_ss=Y_ss,
             model_label="test_model",
             var_names=["I", "log_K"],
             exog_names=["Z_til"],
@@ -167,10 +174,92 @@ class TestPathResult:
             assert np.allclose(loaded.UX, result.UX)
             assert np.allclose(loaded.Z, result.Z)
             assert np.allclose(loaded.Y, result.Y)
+            assert np.allclose(loaded.UX_ss, result.UX_ss)
+            assert np.allclose(loaded.Z_ss, result.Z_ss)
+            assert np.allclose(loaded.Y_ss, result.Y_ss)
             assert loaded.model_label == result.model_label
             assert loaded.var_names == result.var_names
             assert loaded.exog_names == result.exog_names
             assert loaded.y_names == result.y_names
+
+    def test_path_result_load_without_steady_state_fields(self):
+        """Test loading older PathResult files without steady-state arrays."""
+        UX = np.random.randn(10, 2)
+        Z = np.random.randn(10, 1)
+        result = PathResult(UX=UX, Z=Z)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            filepath = f"{tmpdir}/path_result.npz"
+            result.save(filepath, overwrite=True)
+            loaded = PathResult.load(filepath)
+
+        assert loaded.UX_ss is None
+        assert loaded.Z_ss is None
+        assert loaded.Y_ss is None
+
+    def test_sequence_result_save_load_preserves_steady_states(self):
+        """Test SequenceResult roundtrips per-regime steady-state arrays."""
+        UX = np.ones((4, 2))
+        Z = np.zeros((4, 1))
+        regime = DeterministicResult(
+            UX=UX,
+            Z=Z,
+            UX_ss=np.array([1.0, 2.0]),
+            Z_ss=np.array([0.0]),
+            model_label="test_model",
+            var_names=["I", "log_K"],
+            exog_names=["Z_til"],
+        )
+        result = SequenceResult(regimes=[regime], model_label="test_model")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            filepath = f"{tmpdir}/sequence_result.npz"
+            result.save(filepath, overwrite=True)
+            loaded = SequenceResult.load(filepath)
+
+        assert np.allclose(loaded.regimes[0].UX_ss, regime.UX_ss)
+        assert np.allclose(loaded.regimes[0].Z_ss, regime.Z_ss)
+        assert loaded.regimes[0].Y_ss is None
+
+    def test_deterministic_result_save_load_preserves_steady_states(self):
+        """Test DeterministicResult roundtrips steady-state arrays."""
+        UX = np.ones((4, 2))
+        Z = np.zeros((4, 1))
+        result = DeterministicResult(
+            UX=UX,
+            Z=Z,
+            UX_ss=np.array([1.0, 2.0]),
+            Z_ss=np.array([0.0]),
+            terminal_condition="linear",
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            filepath = f"{tmpdir}/deterministic_result.npz"
+            result.save(filepath, overwrite=True)
+            loaded = DeterministicResult.load(filepath)
+
+        assert np.allclose(loaded.UX_ss, result.UX_ss)
+        assert np.allclose(loaded.Z_ss, result.Z_ss)
+        assert loaded.Y_ss is None
+        assert loaded.terminal_condition == result.terminal_condition
+
+    def test_sequence_splice_preserves_only_common_steady_states(self):
+        """Test splice keeps steady states only when all regimes match."""
+        UX = np.ones((4, 2))
+        Z = np.zeros((4, 1))
+        shared = np.array([1.0, 2.0])
+        regime_0 = DeterministicResult(UX=UX, Z=Z, UX_ss=shared)
+        regime_1 = DeterministicResult(UX=UX, Z=Z, UX_ss=shared.copy())
+        same = SequenceResult(regimes=[regime_0, regime_1], time_list=[1]).splice()
+
+        assert np.allclose(same.UX_ss, shared)
+
+        regime_2 = DeterministicResult(UX=UX, Z=Z, UX_ss=np.array([1.0, 3.0]))
+        different = SequenceResult(
+            regimes=[regime_0, regime_2], time_list=[1]
+        ).splice()
+
+        assert different.UX_ss is None
 
     def test_path_result_to_df(self):
         """Test converting PathResult to pandas DataFrame."""
@@ -302,11 +391,17 @@ class TestIrfResult:
         UX = np.random.randn(20, 2)
         Z = np.random.randn(20, 1)
         Y = np.random.randn(20, 3)
+        UX_ss = np.array([1.0, 2.0])
+        Z_ss = np.array([0.0])
+        Y_ss = np.array([3.0, 4.0, 5.0])
 
         result = IrfResult(
             UX=UX,
             Z=Z,
             Y=Y,
+            UX_ss=UX_ss,
+            Z_ss=Z_ss,
+            Y_ss=Y_ss,
             model_label="test_model",
             var_names=["I", "log_K"],
             exog_names=["Z_til"],
@@ -324,6 +419,9 @@ class TestIrfResult:
             assert np.allclose(loaded.UX, result.UX)
             assert np.allclose(loaded.Z, result.Z)
             assert np.allclose(loaded.Y, result.Y)
+            assert np.allclose(loaded.UX_ss, result.UX_ss)
+            assert np.allclose(loaded.Z_ss, result.Z_ss)
+            assert np.allclose(loaded.Y_ss, result.Y_ss)
             assert loaded.model_label == result.model_label
             assert loaded.shock_name == result.shock_name
             assert loaded.shock_size == result.shock_size
@@ -354,6 +452,14 @@ class TestComputeIrfsWithIntermediates:
         for shock_name, irf_result in irf_dict.items():
             assert isinstance(irf_result, IrfResult)
             assert irf_result.shock_name == shock_name
+            assert np.allclose(
+                irf_result.UX_ss,
+                np.concatenate(
+                    [mod.steady_components["u"], mod.steady_components["x"]]
+                ),
+            )
+            assert np.allclose(irf_result.Z_ss, mod.steady_components["z"])
+            assert irf_result.Y_ss is not None
 
     def test_irf_result_contains_intermediate_variables(self):
         """Test that IrfResults contain intermediate variables."""

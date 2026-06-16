@@ -331,10 +331,19 @@ def solve_sequence_linear(
 
         # Create DeterministicResult for this regime
         # Linear solutions are exact (no iteration), so converged=True, residual=0
+        UX_ss = np.concatenate(
+            [current_mod.steady_components["u"], current_mod.steady_components["x"]]
+        )
+        Z_ss = np.asarray(current_mod.steady_components["z"])
+        Y_ss = _compute_initial_intermediates(current_mod, UX_ss, Z_ss)
+
         result = DeterministicResult(
             UX=UX,
             Z=Z_path,
             Y=Y,
+            UX_ss=UX_ss,
+            Z_ss=Z_ss,
+            Y_ss=Y_ss,
             model_label=model_label,
             var_names=var_names,
             exog_names=exog_names,

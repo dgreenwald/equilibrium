@@ -565,10 +565,15 @@ def solve(
             )
         Y[0, :] = y_init
 
+    ux_ss, z_ss, y_ss = _steady_result_arrays(mod)
+
     result = DeterministicResult(
         UX=UX,
         Z=np.asarray(Z),
         Y=Y,
+        UX_ss=ux_ss,
+        Z_ss=z_ss,
+        Y_ss=y_ss,
         model_label=model_label,
         var_names=var_names,
         exog_names=exog_names,
@@ -659,6 +664,14 @@ def _compute_initial_intermediates(mod, ux_init, z_init):
     u_init, x_init = np.split(ux_init, np.array((mod.N["u"],)))
     params = np.array([mod.params[key] for key in mod.var_lists["params"]])
     return mod.intermediates(u_init, x_init, z_init, params)
+
+
+def _steady_result_arrays(mod):
+    """Return steady-state arrays aligned with result UX, Z, and Y columns."""
+    ux_ss = np.concatenate([mod.steady_components["u"], mod.steady_components["x"]])
+    z_ss = np.asarray(mod.steady_components["z"])
+    y_ss = _compute_initial_intermediates(mod, ux_ss, z_ss)
+    return ux_ss, z_ss, y_ss
 
 
 def _solve_lbj_internal(

@@ -403,6 +403,12 @@ def test_solve_sequence_single_regime():
     N_ux = mod.N["u"] + mod.N["x"]
     assert result.regimes[0].UX.shape == (Nt, N_ux)
     assert result.regimes[0].Z.shape == (Nt, mod.N["z"])
+    assert np.allclose(
+        result.regimes[0].UX_ss,
+        np.concatenate([mod.steady_components["u"], mod.steady_components["x"]]),
+    )
+    assert np.allclose(result.regimes[0].Z_ss, mod.steady_components["z"])
+    assert result.regimes[0].Y_ss is not None
 
 
 def test_solve_sequence_two_regimes():

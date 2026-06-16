@@ -128,6 +128,45 @@ def _apply_series_transforms(
     return transformed
 
 
+def _optional_array(data: Mapping[str, Any], key: str) -> Optional[np.ndarray]:
+    """Return an optional array from serialized result data."""
+    if key not in data:
+        return None
+    return np.asarray(data[key])
+
+
+def _add_steady_arrays(data: dict[str, Any], result: "PathResult", prefix: str = ""):
+    """Add available steady-state arrays to a serialized result payload."""
+    for name in ("UX_ss", "Z_ss", "Y_ss"):
+        value = getattr(result, name)
+        if value is not None:
+            data[f"{prefix}{name}"] = value
+
+
+def _common_steady_array(
+    regimes: list["DeterministicResult"], attr: str
+) -> Optional[np.ndarray]:
+    """Return attr when all regimes have matching non-None values; else None."""
+    if not regimes:
+        return None
+
+    ref = getattr(regimes[0], attr)
+    if ref is None:
+        return None
+
+    ref_arr = np.asarray(ref)
+    for regime in regimes[1:]:
+        current = getattr(regime, attr)
+        if current is None:
+            return None
+        current_arr = np.asarray(current)
+        if current_arr.shape != ref_arr.shape or not np.allclose(
+            current_arr, ref_arr
+        ):
+            return None
+    return ref_arr.copy()
+
+
 @dataclass
 class PathResult:
     """
@@ -144,6 +183,12 @@ class PathResult:
         Exogenous variables path, shape (Nt, N_z).
     Y : np.ndarray, optional
         Intermediate variables, shape (Nt, N_y). None if not computed.
+    UX_ss : np.ndarray, optional
+        Steady-state reference values aligned with ``UX`` columns.
+    Z_ss : np.ndarray, optional
+        Steady-state reference values aligned with ``Z`` columns.
+    Y_ss : np.ndarray, optional
+        Steady-state reference values aligned with ``Y`` columns.
     model_label : str
         Label of the model used.
     var_names : list[str]
@@ -157,6 +202,9 @@ class PathResult:
     UX: np.ndarray
     Z: np.ndarray
     Y: Optional[np.ndarray] = None
+    UX_ss: Optional[np.ndarray] = None
+    Z_ss: Optional[np.ndarray] = None
+    Y_ss: Optional[np.ndarray] = None
     model_label: str = "_default"
     var_names: list[str] = field(default_factory=list)
     exog_names: list[str] = field(default_factory=list)
@@ -206,6 +254,7 @@ class PathResult:
         }
         if self.Y is not None:
             data["Y"] = self.Y
+        _add_steady_arrays(data, self)
 
         metadata = self._get_metadata()
 
@@ -393,6 +442,9 @@ class PathResult:
             UX=np.asarray(loaded["UX"]),
             Z=np.asarray(loaded["Z"]),
             Y=np.asarray(loaded["Y"]) if "Y" in loaded else None,
+            UX_ss=_optional_array(loaded, "UX_ss"),
+            Z_ss=_optional_array(loaded, "Z_ss"),
+            Y_ss=_optional_array(loaded, "Y_ss"),
             model_label=metadata.get("model_label", "_default"),
             var_names=metadata.get("var_names", []),
             exog_names=metadata.get("exog_names", []),
@@ -495,6 +547,7 @@ class DeterministicResult(PathResult):
         }
         if self.Y is not None:
             data["Y"] = self.Y
+        _add_steady_arrays(data, self)
 
         metadata = self._get_metadata()
         if experiment_label:
@@ -543,6 +596,9 @@ class DeterministicResult(PathResult):
             UX=np.asarray(loaded["UX"]),
             Z=np.asarray(loaded["Z"]),
             Y=np.asarray(loaded["Y"]) if "Y" in loaded else None,
+            UX_ss=_optional_array(loaded, "UX_ss"),
+            Z_ss=_optional_array(loaded, "Z_ss"),
+            Y_ss=_optional_array(loaded, "Y_ss"),
             model_label=metadata.get("model_label", "_default"),
             var_names=metadata.get("var_names", []),
             exog_names=metadata.get("exog_names", []),
@@ -670,6 +726,9 @@ class IrfResult(PathResult):
             UX=np.asarray(loaded["UX"]),
             Z=np.asarray(loaded["Z"]),
             Y=np.asarray(loaded["Y"]) if "Y" in loaded else None,
+            UX_ss=_optional_array(loaded, "UX_ss"),
+            Z_ss=_optional_array(loaded, "Z_ss"),
+            Y_ss=_optional_array(loaded, "Y_ss"),
             model_label=metadata.get("model_label", "_default"),
             var_names=metadata.get("var_names", []),
             exog_names=metadata.get("exog_names", []),
@@ -853,6 +912,9 @@ class SequenceResult:
             UX=spliced_UX,
             Z=spliced_Z,
             Y=spliced_Y,
+            UX_ss=_common_steady_array(self.regimes, "UX_ss"),
+            Z_ss=_common_steady_array(self.regimes, "Z_ss"),
+            Y_ss=_common_steady_array(self.regimes, "Y_ss"),
             model_label=self.model_label,
             var_names=ref_var_names,
             exog_names=ref_exog_names,
@@ -953,6 +1015,7 @@ class SequenceResult:
             data[f"Z_regime_{i}"] = regime.Z
             if regime.Y is not None:
                 data[f"Y_regime_{i}"] = regime.Y
+            _add_steady_arrays(data, regime, prefix=f"regime_{i}_")
             regime_metadata.append(
                 {
                     "model_label": regime.model_label,
@@ -1030,6 +1093,9 @@ class SequenceResult:
                     UX=np.asarray(loaded.get(f"UX_regime_{i}")),
                     Z=np.asarray(loaded.get(f"Z_regime_{i}")),
                     Y=np.asarray(loaded[y_key]) if y_key in loaded else None,
+                    UX_ss=_optional_array(loaded, f"regime_{i}_UX_ss"),
+                    Z_ss=_optional_array(loaded, f"regime_{i}_Z_ss"),
+                    Y_ss=_optional_array(loaded, f"regime_{i}_Y_ss"),
                     model_label=regime_meta.get("model_label", model_label),
                     var_names=regime_meta.get("var_names", []),
                     exog_names=regime_meta.get("exog_names", []),

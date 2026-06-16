@@ -1507,6 +1507,9 @@ def _compute_irf_from_linear_model(
                 if irf_result.Y is not None
                 else None
             ),
+            UX_ss=irf_result.UX_ss,
+            Z_ss=irf_result.Z_ss,
+            Y_ss=irf_result.Y_ss,
             model_label=irf_result.model_label,
             var_names=irf_result.var_names,
             exog_names=irf_result.exog_names,

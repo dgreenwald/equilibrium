@@ -355,6 +355,19 @@ class LinearModel:
         ux_names = m.var_lists["u"] + m.var_lists["x"]
         exog_names = m.exog_list
         y_names = m.var_lists.get("intermediate", [])
+        UX_ss = np.concatenate([m.steady_components["u"], m.steady_components["x"]])
+        Z_ss = np.asarray(m.steady_components["z"])
+        Y_ss = None
+        if y_names:
+            params = np.array([m.params[key] for key in m.var_lists["params"]])
+            Y_ss = np.asarray(
+                m.intermediates(
+                    m.steady_components["u"],
+                    m.steady_components["x"],
+                    Z_ss,
+                    params,
+                )
+            )
 
         self._irf_dict = {}
         for i_shock, shock_name in enumerate(shock_names):
@@ -368,6 +381,9 @@ class LinearModel:
                 UX=UX,
                 Z=Z,
                 Y=Y,
+                UX_ss=UX_ss,
+                Z_ss=Z_ss,
+                Y_ss=Y_ss,
                 model_label=m.label,
                 var_names=ux_names,
                 exog_names=exog_names,
@@ -519,6 +535,12 @@ class LinearModel:
             data[f"Z_{shock_name}"] = irf_result.Z
             if irf_result.Y is not None:
                 data[f"Y_{shock_name}"] = irf_result.Y
+            if irf_result.UX_ss is not None:
+                data[f"UX_ss_{shock_name}"] = irf_result.UX_ss
+            if irf_result.Z_ss is not None:
+                data[f"Z_ss_{shock_name}"] = irf_result.Z_ss
+            if irf_result.Y_ss is not None:
+                data[f"Y_ss_{shock_name}"] = irf_result.Y_ss
 
         if include_matrices:
             data.update(self.as_dict(include_irfs=False))
