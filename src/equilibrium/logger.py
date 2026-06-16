@@ -63,6 +63,15 @@ def _has_handler_type(logger: logging.Logger, handler_type: type) -> bool:
     return any(isinstance(h, handler_type) for h in logger.handlers)
 
 
+def _has_console_handler(logger: logging.Logger) -> bool:
+    """Check if the logger already has a stdout/stderr console handler."""
+    return any(
+        type(h) is logging.StreamHandler
+        and getattr(h, "stream", None) in (sys.stdout, sys.stderr)
+        for h in logger.handlers
+    )
+
+
 def configure_logging(settings: Settings | None = None) -> logging.Logger:
     """
     Configure the Equilibrium logging system based on settings.
@@ -108,7 +117,7 @@ def configure_logging(settings: Settings | None = None) -> logging.Logger:
     formatter = logging.Formatter(LOG_FORMAT, datefmt=DATE_FORMAT)
 
     # Add console handler if enabled and not already present
-    if log_config.console and not _has_handler_type(logger, logging.StreamHandler):
+    if log_config.console and not _has_console_handler(logger):
         console_handler = logging.StreamHandler(sys.stdout)
         console_handler.setLevel(level)
         console_handler.setFormatter(formatter)

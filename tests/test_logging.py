@@ -143,6 +143,36 @@ class TestConfigureLogging:
         ]
         assert len(console_handlers) == 1
 
+    def test_file_handler_does_not_suppress_console_handler(
+        self, clean_logger, temp_log_dir
+    ):
+        """Test pre-existing file handlers do not count as console handlers."""
+        import sys
+        from logging.handlers import RotatingFileHandler
+
+        existing_file_handler = RotatingFileHandler(temp_log_dir / "existing.log")
+        clean_logger.addHandler(existing_file_handler)
+
+        settings = Settings()
+        settings.paths = Paths(data_dir=temp_log_dir)
+        settings.paths.ensure_exists()
+        settings.logging = LoggingConfig(console=True, file=False)
+
+        logger = configure_logging(settings)
+
+        console_handlers = [
+            h
+            for h in logger.handlers
+            if type(h) is logging.StreamHandler
+            and h.stream in (sys.stdout, sys.stderr)
+        ]
+        file_handlers = [
+            h for h in logger.handlers if isinstance(h, RotatingFileHandler)
+        ]
+
+        assert len(console_handlers) == 1
+        assert file_handlers == [existing_file_handler]
+
     def test_configure_with_file_only(self, clean_logger, temp_log_dir):
         """Test configuration with only file handler."""
         settings = Settings()
