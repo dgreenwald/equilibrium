@@ -299,10 +299,6 @@ def solve_sequence_linear(
                 y_init_regime = _compute_initial_intermediates(
                     base_mod, UX[0], z_init_for_y
                 )
-            elif hasattr(current_mod, "var_lists"):
-                y_names = current_mod.var_lists.get("intermediate", [])
-                if y_names:
-                    y_init_regime = np.full(len(y_names), np.nan)
 
             if y_init_regime is not None:
                 if Y is None:

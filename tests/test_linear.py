@@ -217,6 +217,29 @@ class TestSolveSequenceLinear:
 
         assert np.allclose(result.regimes[0].Y[0, :], y_init)
 
+    def test_linear_custom_ux_init_keeps_computed_initial_intermediates(self):
+        """Test custom ux_init without y_init keeps linear-computed Y[0]."""
+        mod = set_model()
+        mod.solve_steady(calibrate=True)
+        mod.linearize()
+
+        spec = DetSpec(n_regimes=1)
+        Nt = 5
+        ux_init = np.concatenate(
+            [mod.steady_components["u"], mod.steady_components["x"]]
+        )
+        ux_init = ux_init.copy()
+        ux_init[mod.N["u"] :] = ux_init[mod.N["u"] :] + 0.05
+
+        result = linear.solve_sequence_linear(spec, mod, Nt, ux_init=ux_init)
+        recomputed_Y = linear.compute_linear_intermediates(
+            mod, result.regimes[0].UX, result.regimes[0].Z
+        )
+
+        assert result.regimes[0].Y is not None
+        assert not np.isnan(result.regimes[0].Y[0, :]).any()
+        np.testing.assert_allclose(result.regimes[0].Y[0, :], recomputed_Y[0, :])
+
     def test_ux_init_deviations_matches_equivalent_levels(self):
         """Test that ux_init deviations are converted to equivalent levels."""
         mod = set_model()
