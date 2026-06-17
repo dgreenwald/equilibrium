@@ -630,6 +630,7 @@ def _run_calibration_loop(
     save_dir,
     initialize_from_saved: bool,
     load_label: Optional[str],
+    gradient_kwargs: Optional[dict] = None,
 ) -> CalibrationResult:
     """
     Run the calibration optimization loop given a solution function.
@@ -831,7 +832,9 @@ def _run_calibration_loop(
                 objective, initial_params[0], bounds, method, tol, maxiter
             )
         else:
-            result = _solve_vector_root(objective, initial_params, method, tol, maxiter)
+            result = _solve_vector_root(
+                objective, initial_params, method, tol, maxiter, gradient_kwargs
+            )
     else:
         if is_scalar:
             result = _solve_scalar_minimize(
@@ -920,6 +923,7 @@ def calibrate(
     save_dir: Optional[Union[Path, str]] = None,
     initialize_from_saved: bool = False,
     load_label: Optional[str] = None,
+    gradient_kwargs: Optional[dict] = None,
     **solver_kwargs,
 ) -> CalibrationResult:
     """
@@ -1167,6 +1171,7 @@ def calibrate(
         save_dir=save_dir,
         initialize_from_saved=initialize_from_saved,
         load_label=load_label,
+        gradient_kwargs=gradient_kwargs,
     )
 
 
@@ -1193,6 +1198,7 @@ def calibrate_custom(
     save_dir: Optional[Union[Path, str]] = None,
     initialize_from_saved: bool = False,
     load_label: Optional[str] = None,
+    gradient_kwargs: Optional[dict] = None,
 ) -> CalibrationResult:
     """
     Calibrate model parameters using a caller-supplied solution builder.
@@ -1337,6 +1343,7 @@ def calibrate_custom(
         save_dir=save_dir,
         initialize_from_saved=initialize_from_saved,
         load_label=load_label,
+        gradient_kwargs=gradient_kwargs,
     )
 
 
@@ -1639,6 +1646,7 @@ def _solve_vector_root(
     method: Optional[str],
     tol: float,
     maxiter: int,
+    gradient_kwargs: Optional[dict] = None,
 ) -> CalibrationResult:
     """Solve vector root-finding problem."""
     if method is None:
@@ -1654,6 +1662,7 @@ def _solve_vector_root(
                 tol=tol,
                 max_iterations=maxiter,
                 verbose=False,
+                gradient_kwargs=gradient_kwargs or {},
             )
             params = {f"param_{i}": val for i, val in enumerate(sol.x)}
             return CalibrationResult(
