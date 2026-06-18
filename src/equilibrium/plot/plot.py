@@ -1182,15 +1182,26 @@ def plot_deterministic_results(
     else:
         base_plot_dir = Path(plot_dir)
 
+    _label_info_to_write: Optional[str] = None
     if subdir_name is None:
         if label_parts:
-            subdir_name = "_".join(label_parts)
+            candidate = "_".join(label_parts)
         else:
-            subdir_name = "_default"
+            candidate = "_default"
         if result_kind != "sequence":
-            subdir_name = f"{subdir_name}_{result_kind}"
+            candidate = f"{candidate}_{result_kind}"
+        if len(candidate) > 250:
+            from ..utils.io import _sha1
+            subdir_name = f"plots_{_sha1(candidate)}"
+            _label_info_to_write = candidate
+        else:
+            subdir_name = candidate
 
     plot_dir = base_plot_dir / subdir_name if subdir_name else base_plot_dir
+
+    if _label_info_to_write is not None:
+        plot_dir.mkdir(parents=True, exist_ok=True)
+        (plot_dir / "_plot_label_info.txt").write_text(_label_info_to_write)
 
     # Build name_to_parts for style fallback/level resolution.
     # Label-loaded results occupy positions [n_explicit : n_explicit + n_labeled]
