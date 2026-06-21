@@ -897,6 +897,150 @@ def _expand_group_style_dicts(
     return result
 
 
+def _resolve_deviation_index(
+    deviation_from: Union[tuple[str, Optional[str]], str],
+    result_names: Sequence[str],
+    result_labels: Optional[Sequence[tuple[str, Optional[str]]]],
+    n_explicit: int,
+) -> int:
+    """Resolve a deviation baseline selector to a prepared result index."""
+    matches: List[int] = []
+    selector_text: str
+
+    if isinstance(deviation_from, tuple):
+        selector_text = repr(deviation_from)
+        if len(deviation_from) != 2:
+            raise ValueError(
+                "deviation_from tuple must be (model_label, experiment_label)."
+            )
+        if result_labels:
+            for i, label in enumerate(result_labels):
+                if label == deviation_from:
+                    matches.append(n_explicit + i)
+    elif isinstance(deviation_from, str):
+        selector_text = repr(deviation_from)
+        matches = [i for i, name in enumerate(result_names) if name == deviation_from]
+    else:
+        raise TypeError(
+            "deviation_from must be a result name string, a "
+            "(model_label, experiment_label) tuple, or None."
+        )
+
+    if len(matches) == 1:
+        return matches[0]
+
+    available_names = ", ".join(repr(name) for name in result_names)
+    available_labels = (
+        ", ".join(repr(label) for label in result_labels) if result_labels else "none"
+    )
+    if not matches:
+        raise ValueError(
+            f"deviation_from={selector_text} did not match a plotted result. "
+            f"Available result_names: [{available_names}]. "
+            f"Available result_labels: [{available_labels}]."
+        )
+    raise ValueError(
+        f"deviation_from={selector_text} matched multiple plotted results. "
+        "Use unique result_names or a unique (model_label, experiment_label) tuple."
+    )
+
+
+def _append_deviation_suffix(
+    result_names: Sequence[str],
+    *,
+    overlay_name: str,
+    overlay_data: Optional[Union[np.ndarray, Mapping[str, np.ndarray]]],
+    deviation_label_suffix: Optional[str],
+) -> List[str]:
+    """Append a display suffix to non-overlay deviation labels when requested."""
+    if not deviation_label_suffix:
+        return list(result_names)
+
+    overlay_idx = len(result_names) - 1 if overlay_data is not None else None
+    suffix = str(deviation_label_suffix)
+    labels = []
+    for idx, name in enumerate(result_names):
+        if idx == overlay_idx and name == overlay_name:
+            labels.append(name)
+        else:
+            labels.append(f"{name}{suffix}")
+    return labels
+
+
+def _resolve_deviation_var_indices(
+    var_names: Sequence[str],
+    *,
+    deviation_include_vars: Optional[Sequence[str]],
+    deviation_exclude_vars: Optional[Sequence[str]],
+) -> List[int]:
+    """Resolve selective deviation variables to prepared path column indices."""
+    include_vars = list(deviation_include_vars or [])
+    exclude_vars = list(deviation_exclude_vars or [])
+
+    if include_vars and exclude_vars:
+        raise ValueError(
+            "Provide either deviation_include_vars or deviation_exclude_vars, not both."
+        )
+
+    available = list(var_names)
+    available_set = set(available)
+    if include_vars:
+        missing = [name for name in include_vars if name not in available_set]
+        if missing:
+            warnings.warn(
+                f"deviation_include_vars entries {missing} are not present in "
+                f"prepared variables and will be ignored. Available variables: "
+                f"{available}.",
+                UserWarning,
+                stacklevel=2,
+            )
+        selected = [name for name in include_vars if name in available_set]
+    elif exclude_vars:
+        exclude_set = set(exclude_vars)
+        selected = [name for name in available if name not in exclude_set]
+    else:
+        selected = available
+
+    return [available.index(name) for name in selected]
+
+
+def _alias_group_names_in_kwargs(
+    kwargs: Dict[str, Any],
+    name_aliases: Mapping[str, str],
+) -> Dict[str, Any]:
+    """Preserve styling keyed by original group names after display renaming."""
+    if not name_aliases:
+        return kwargs
+
+    result = dict(kwargs)
+    for key in _GROUP_STYLE_KEYS:
+        d = result.get(key)
+        if not d:
+            continue
+        expanded = dict(d)
+        for old_name, new_name in name_aliases.items():
+            if old_name in expanded and new_name not in expanded:
+                expanded[new_name] = expanded[old_name]
+        result[key] = expanded
+
+    for key in ("legend_include", "legend_exclude"):
+        names = result.get(key)
+        if names is not None:
+            result[key] = [name_aliases.get(name, name) for name in names]
+
+    band_groups = result.get("band_groups")
+    if band_groups:
+        expanded_bands = dict(band_groups)
+        for old_name, groups in band_groups.items():
+            new_name = name_aliases.get(old_name, old_name)
+            new_groups = [name_aliases.get(group, group) for group in groups]
+            if new_name not in expanded_bands:
+                expanded_bands[new_name] = new_groups
+        result["band_groups"] = expanded_bands
+
+    return result
+
+
 def plot_deterministic_results(
     results: Optional[Sequence[Union["DeterministicResult", "SequenceResult"]]] = None,
     include_list: Optional[Sequence[str]] = None,
@@ -928,6 +1072,12 @@ def plot_deterministic_results(
     overlay_spec: Optional[PlotSpec] = None,
     style_level: str = "full",
     var_ylims: Optional[Dict[str, tuple[float, float]]] = None,
+    deviation_from: Optional[Union[tuple[str, Optional[str]], str]] = None,
+    deviation_apply_to_overlay: bool = True,
+    deviation_label_suffix: Optional[str] = None,
+    plot_deviation_baseline: bool = True,
+    deviation_include_vars: Optional[Sequence[str]] = None,
+    deviation_exclude_vars: Optional[Sequence[str]] = None,
     **kwargs,
 ) -> List[Path]:
     """
@@ -1020,6 +1170,25 @@ def plot_deterministic_results(
     overlay_spec : PlotSpec, optional
         Full PlotSpec control for overlay styling. Has highest priority, overriding
         all other overlay styling parameters.
+    deviation_from : tuple[str, str | None] or str, optional
+        Result to use as the deviation baseline. Tuples match loaded
+        ``(model_label, experiment_label)`` pairs; strings match prepared
+        ``result_names``. Subtraction happens after all series transforms.
+    deviation_apply_to_overlay : bool, default True
+        Whether overlay data should also be plotted relative to the selected
+        deviation baseline.
+    deviation_label_suffix : str, optional
+        Suffix appended to non-overlay result labels when deviation plotting is
+        active. Labels are unchanged by default.
+    plot_deviation_baseline : bool, default True
+        Whether to include the selected baseline result as a zero path.
+    deviation_include_vars : Sequence[str], optional
+        Prepared variable names to plot in deviations. When omitted or empty,
+        all prepared variables are eligible unless ``deviation_exclude_vars`` is
+        provided.
+    deviation_exclude_vars : Sequence[str], optional
+        Prepared variable names to leave in original units/levels when plotting
+        deviations. Cannot be combined with nonempty ``deviation_include_vars``.
     **kwargs
         Additional keyword arguments passed to plot_paths.
 
@@ -1116,6 +1285,72 @@ def plot_deterministic_results(
         overlay_name=overlay_name,
     )
 
+    # Build name_to_parts for style fallback/level resolution. Label-loaded
+    # results occupy positions [n_explicit : n_explicit + n_labeled].
+    original_result_names = list(prep.result_names)
+    n_explicit = len(results) if results else 0
+    name_to_parts: Dict[str, tuple] = {}
+    if result_labels:
+        for i, (model_label, experiment_label) in enumerate(result_labels):
+            name = original_result_names[n_explicit + i]
+            name_to_parts[name] = (model_label, experiment_label)
+
+    deviation_name_aliases: Dict[str, str] = {}
+    if deviation_from is not None:
+        baseline_idx = _resolve_deviation_index(
+            deviation_from=deviation_from,
+            result_names=original_result_names,
+            result_labels=result_labels,
+            n_explicit=n_explicit,
+        )
+        deviation_var_indices = _resolve_deviation_var_indices(
+            prep.var_names,
+            deviation_include_vars=deviation_include_vars,
+            deviation_exclude_vars=deviation_exclude_vars,
+        )
+
+        original_path_vals = np.array(prep.path_vals, copy=True)
+        path_vals = np.array(original_path_vals, copy=True)
+        selected_vals = np.take(original_path_vals, deviation_var_indices, axis=2)
+        baseline = np.take(
+            original_path_vals[baseline_idx : baseline_idx + 1, :, :],
+            deviation_var_indices,
+            axis=2,
+        )
+        path_vals[:, :, deviation_var_indices] = selected_vals - baseline
+
+        overlay_idx = len(original_result_names) - 1 if overlay_data is not None else None
+        if (
+            overlay_idx is not None
+            and not deviation_apply_to_overlay
+            and overlay_idx != baseline_idx
+        ):
+            path_vals[overlay_idx, :, :] = original_path_vals[overlay_idx, :, :]
+
+        keep_indices = list(range(len(original_result_names)))
+        if not plot_deviation_baseline:
+            keep_indices = [i for i in keep_indices if i != baseline_idx]
+            path_vals = path_vals[keep_indices, :, :]
+
+        kept_original_names = [original_result_names[i] for i in keep_indices]
+        final_result_names = _append_deviation_suffix(
+            kept_original_names,
+            overlay_name=overlay_name,
+            overlay_data=overlay_data,
+            deviation_label_suffix=deviation_label_suffix,
+        )
+        deviation_name_aliases = dict(zip(kept_original_names, final_result_names))
+
+        old_name_to_parts = dict(name_to_parts)
+        name_to_parts = {
+            final_name: old_name_to_parts[old_name]
+            for old_name, final_name in zip(kept_original_names, final_result_names)
+            if old_name in old_name_to_parts
+        }
+
+        prep.path_vals = path_vals
+        prep.result_names = final_result_names
+
     # Build overlay styling specification if overlay was provided
     if overlay_data is not None:
         overlay_style_spec = _build_overlay_plot_spec(
@@ -1203,22 +1438,15 @@ def plot_deterministic_results(
         plot_dir.mkdir(parents=True, exist_ok=True)
         (plot_dir / "_plot_label_info.txt").write_text(_label_info_to_write)
 
-    # Build name_to_parts for style fallback/level resolution.
-    # Label-loaded results occupy positions [n_explicit : n_explicit + n_labeled]
-    # in prep.result_names.
-    name_to_parts: Dict[str, tuple] = {}
-    if result_labels:
-        n_explicit = len(results) if results else 0
-        for i, (model_label, experiment_label) in enumerate(result_labels):
-            name = prep.result_names[n_explicit + i]
-            name_to_parts[name] = (model_label, experiment_label)
-
     # Call plot_paths with the prepared data
     plot_kwargs = plot_spec.to_kwargs() if plot_spec is not None else {}
     if var_ylims is not None:
         kwargs["var_ylims"] = var_ylims
+    aliased_kwargs = _alias_group_names_in_kwargs(
+        {**plot_kwargs, **kwargs}, deviation_name_aliases
+    )
     merged_kwargs = _expand_group_style_dicts(
-        {**plot_kwargs, **kwargs}, name_to_parts, style_level
+        aliased_kwargs, name_to_parts, style_level
     )
 
     return plot_paths(

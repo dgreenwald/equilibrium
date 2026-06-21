@@ -12,6 +12,8 @@ import jax
 import numpy as np
 import pytest
 
+import equilibrium.plot.plot as plot_module
+import equilibrium.plot.preparation as prep_module
 from equilibrium import Model
 from equilibrium.plot import (
     PlotSpec,
@@ -844,6 +846,493 @@ class TestPlotDeterministicResults:
             assert len(paths) > 0
             for path in paths:
                 assert path.exists()
+
+    def test_deviation_from_string_subtracts_transformed_baseline(
+        self, tmp_path, monkeypatch
+    ):
+        """Deviation plotting subtracts the selected transformed path."""
+        baseline = DeterministicResult(
+            UX=np.log(np.array([[1.0], [2.0], [4.0]])),
+            Z=np.zeros((3, 0)),
+            var_names=["log_A"],
+            exog_names=[],
+        )
+        shocked = DeterministicResult(
+            UX=np.log(np.array([[2.0], [5.0], [8.0]])),
+            Z=np.zeros((3, 0)),
+            var_names=["log_A"],
+            exog_names=[],
+        )
+        captured = {}
+
+        def fake_plot_paths(**kwargs):
+            captured.update(kwargs)
+            return [tmp_path / "captured.pdf"]
+
+        monkeypatch.setattr(plot_module, "plot_paths", fake_plot_paths)
+
+        plot_deterministic_results(
+            [baseline, shocked],
+            include_list=["log_A"],
+            plot_dir=tmp_path,
+            result_names=["Baseline", "Shocked"],
+            series_transforms={"log_A": SeriesTransform(log_to_level=True)},
+            deviation_from="Baseline",
+        )
+
+        assert captured["group_names"] == ["Baseline", "Shocked"]
+        np.testing.assert_allclose(captured["path_vals"][0, :, 0], 0.0)
+        np.testing.assert_allclose(captured["path_vals"][1, :, 0], [1.0, 3.0, 4.0])
+
+    def test_deviation_subtracts_overlay_by_default(self, tmp_path, monkeypatch):
+        """Overlay data is relative to the baseline by default."""
+        baseline = DeterministicResult(
+            UX=np.array([[1.0], [2.0], [3.0]]),
+            Z=np.zeros((3, 0)),
+            var_names=["A"],
+            exog_names=[],
+        )
+        model = DeterministicResult(
+            UX=np.array([[2.0], [4.0], [6.0]]),
+            Z=np.zeros((3, 0)),
+            var_names=["A"],
+            exog_names=[],
+        )
+        captured = {}
+
+        def fake_plot_paths(**kwargs):
+            captured.update(kwargs)
+            return [tmp_path / "captured.pdf"]
+
+        monkeypatch.setattr(plot_module, "plot_paths", fake_plot_paths)
+
+        plot_deterministic_results(
+            [baseline, model],
+            include_list=["A"],
+            plot_dir=tmp_path,
+            result_names=["Baseline", "Model"],
+            overlay_data={"A": np.array([5.0, 6.0, 7.0])},
+            deviation_from="Baseline",
+        )
+
+        assert captured["group_names"] == ["Baseline", "Model", "Data"]
+        np.testing.assert_allclose(captured["path_vals"][2, :, 0], [4.0, 4.0, 4.0])
+
+    def test_deviation_include_vars_limits_subtraction(self, tmp_path, monkeypatch):
+        """Only included deviation variables are differenced."""
+        baseline = DeterministicResult(
+            UX=np.array([[1.0, 10.0], [2.0, 20.0], [3.0, 30.0]]),
+            Z=np.zeros((3, 0)),
+            var_names=["A", "B"],
+            exog_names=[],
+        )
+        model = DeterministicResult(
+            UX=np.array([[2.0, 11.0], [4.0, 22.0], [6.0, 33.0]]),
+            Z=np.zeros((3, 0)),
+            var_names=["A", "B"],
+            exog_names=[],
+        )
+        captured = {}
+
+        def fake_plot_paths(**kwargs):
+            captured.update(kwargs)
+            return [tmp_path / "captured.pdf"]
+
+        monkeypatch.setattr(plot_module, "plot_paths", fake_plot_paths)
+
+        plot_deterministic_results(
+            [baseline, model],
+            include_list=["A", "B"],
+            plot_dir=tmp_path,
+            result_names=["Baseline", "Model"],
+            deviation_from="Baseline",
+            deviation_include_vars=["A"],
+        )
+
+        np.testing.assert_allclose(captured["path_vals"][0, :, 0], 0.0)
+        np.testing.assert_allclose(captured["path_vals"][1, :, 0], [1.0, 2.0, 3.0])
+        np.testing.assert_allclose(captured["path_vals"][0, :, 1], [10.0, 20.0, 30.0])
+        np.testing.assert_allclose(captured["path_vals"][1, :, 1], [11.0, 22.0, 33.0])
+
+    def test_deviation_exclude_vars_limits_subtraction(self, tmp_path, monkeypatch):
+        """Excluded deviation variables remain in original units."""
+        baseline = DeterministicResult(
+            UX=np.array([[1.0, 10.0], [2.0, 20.0], [3.0, 30.0]]),
+            Z=np.zeros((3, 0)),
+            var_names=["A", "B"],
+            exog_names=[],
+        )
+        model = DeterministicResult(
+            UX=np.array([[2.0, 11.0], [4.0, 22.0], [6.0, 33.0]]),
+            Z=np.zeros((3, 0)),
+            var_names=["A", "B"],
+            exog_names=[],
+        )
+        captured = {}
+
+        def fake_plot_paths(**kwargs):
+            captured.update(kwargs)
+            return [tmp_path / "captured.pdf"]
+
+        monkeypatch.setattr(plot_module, "plot_paths", fake_plot_paths)
+
+        plot_deterministic_results(
+            [baseline, model],
+            include_list=["A", "B"],
+            plot_dir=tmp_path,
+            result_names=["Baseline", "Model"],
+            deviation_from="Baseline",
+            deviation_exclude_vars=["B"],
+        )
+
+        np.testing.assert_allclose(captured["path_vals"][0, :, 0], 0.0)
+        np.testing.assert_allclose(captured["path_vals"][1, :, 0], [1.0, 2.0, 3.0])
+        np.testing.assert_allclose(captured["path_vals"][0, :, 1], [10.0, 20.0, 30.0])
+        np.testing.assert_allclose(captured["path_vals"][1, :, 1], [11.0, 22.0, 33.0])
+
+    def test_deviation_overlay_uses_selected_variable_mask(
+        self, tmp_path, monkeypatch
+    ):
+        """Overlay subtraction follows deviation_include_vars."""
+        baseline = DeterministicResult(
+            UX=np.array([[1.0, 10.0], [2.0, 20.0], [3.0, 30.0]]),
+            Z=np.zeros((3, 0)),
+            var_names=["A", "B"],
+            exog_names=[],
+        )
+        model = DeterministicResult(
+            UX=np.array([[2.0, 11.0], [4.0, 22.0], [6.0, 33.0]]),
+            Z=np.zeros((3, 0)),
+            var_names=["A", "B"],
+            exog_names=[],
+        )
+        captured = {}
+
+        def fake_plot_paths(**kwargs):
+            captured.update(kwargs)
+            return [tmp_path / "captured.pdf"]
+
+        monkeypatch.setattr(plot_module, "plot_paths", fake_plot_paths)
+
+        plot_deterministic_results(
+            [baseline, model],
+            include_list=["A", "B"],
+            plot_dir=tmp_path,
+            result_names=["Baseline", "Model"],
+            overlay_data={"A": np.array([5.0, 6.0, 7.0]), "B": np.array([50.0, 60.0, 70.0])},
+            deviation_from="Baseline",
+            deviation_include_vars=["A"],
+        )
+
+        np.testing.assert_allclose(captured["path_vals"][2, :, 0], [4.0, 4.0, 4.0])
+        np.testing.assert_allclose(captured["path_vals"][2, :, 1], [50.0, 60.0, 70.0])
+
+    def test_deviation_overlay_opt_out_ignores_selected_variable_mask(
+        self, tmp_path, monkeypatch
+    ):
+        """Overlay opt-out leaves all overlay variables unchanged."""
+        baseline = DeterministicResult(
+            UX=np.array([[1.0, 10.0], [2.0, 20.0], [3.0, 30.0]]),
+            Z=np.zeros((3, 0)),
+            var_names=["A", "B"],
+            exog_names=[],
+        )
+        model = DeterministicResult(
+            UX=np.array([[2.0, 11.0], [4.0, 22.0], [6.0, 33.0]]),
+            Z=np.zeros((3, 0)),
+            var_names=["A", "B"],
+            exog_names=[],
+        )
+        captured = {}
+
+        def fake_plot_paths(**kwargs):
+            captured.update(kwargs)
+            return [tmp_path / "captured.pdf"]
+
+        monkeypatch.setattr(plot_module, "plot_paths", fake_plot_paths)
+
+        plot_deterministic_results(
+            [baseline, model],
+            include_list=["A", "B"],
+            plot_dir=tmp_path,
+            result_names=["Baseline", "Model"],
+            overlay_data={"A": np.array([5.0, 6.0, 7.0]), "B": np.array([50.0, 60.0, 70.0])},
+            deviation_from="Baseline",
+            deviation_include_vars=["A"],
+            deviation_apply_to_overlay=False,
+        )
+
+        np.testing.assert_allclose(captured["path_vals"][2, :, 0], [5.0, 6.0, 7.0])
+        np.testing.assert_allclose(captured["path_vals"][2, :, 1], [50.0, 60.0, 70.0])
+
+    def test_deviation_can_leave_overlay_unchanged(self, tmp_path, monkeypatch):
+        """Overlay data can opt out of deviation subtraction."""
+        baseline = DeterministicResult(
+            UX=np.array([[1.0], [2.0], [3.0]]),
+            Z=np.zeros((3, 0)),
+            var_names=["A"],
+            exog_names=[],
+        )
+        model = DeterministicResult(
+            UX=np.array([[2.0], [4.0], [6.0]]),
+            Z=np.zeros((3, 0)),
+            var_names=["A"],
+            exog_names=[],
+        )
+        captured = {}
+
+        def fake_plot_paths(**kwargs):
+            captured.update(kwargs)
+            return [tmp_path / "captured.pdf"]
+
+        monkeypatch.setattr(plot_module, "plot_paths", fake_plot_paths)
+
+        plot_deterministic_results(
+            [baseline, model],
+            include_list=["A"],
+            plot_dir=tmp_path,
+            result_names=["Baseline", "Model"],
+            overlay_data={"A": np.array([5.0, 6.0, 7.0])},
+            deviation_from="Baseline",
+            deviation_apply_to_overlay=False,
+        )
+
+        np.testing.assert_allclose(captured["path_vals"][2, :, 0], [5.0, 6.0, 7.0])
+
+    def test_deviation_can_hide_baseline_zero_series(self, tmp_path, monkeypatch):
+        """The selected zero baseline can be removed from the plotted groups."""
+        baseline = DeterministicResult(
+            UX=np.array([[1.0], [2.0], [3.0]]),
+            Z=np.zeros((3, 0)),
+            var_names=["A"],
+            exog_names=[],
+        )
+        model = DeterministicResult(
+            UX=np.array([[2.0], [4.0], [6.0]]),
+            Z=np.zeros((3, 0)),
+            var_names=["A"],
+            exog_names=[],
+        )
+        captured = {}
+
+        def fake_plot_paths(**kwargs):
+            captured.update(kwargs)
+            return [tmp_path / "captured.pdf"]
+
+        monkeypatch.setattr(plot_module, "plot_paths", fake_plot_paths)
+
+        plot_deterministic_results(
+            [baseline, model],
+            include_list=["A"],
+            plot_dir=tmp_path,
+            result_names=["Baseline", "Model"],
+            deviation_from="Baseline",
+            deviation_label_suffix=" (dev)",
+            plot_deviation_baseline=False,
+        )
+
+        assert captured["group_names"] == ["Model (dev)"]
+        np.testing.assert_allclose(captured["path_vals"][:, :, 0], [[1.0, 2.0, 3.0]])
+
+    def test_deviation_from_tuple_matches_label_loaded_result(
+        self, tmp_path, monkeypatch
+    ):
+        """Tuple selectors resolve against label-loaded result metadata."""
+        captured = {}
+
+        def fake_prepare_deterministic_paths(**kwargs):
+            return prep_module.PreparedPaths(
+                path_vals=np.array([[[1.0], [2.0]], [[3.0], [5.0]]]),
+                var_names=["A"],
+                result_names=["model_base", "model_alt"],
+                processed_results=[],
+                n_periods=2,
+            )
+
+        def fake_plot_paths(**kwargs):
+            captured.update(kwargs)
+            return [tmp_path / "captured.pdf"]
+
+        monkeypatch.setattr(
+            prep_module,
+            "prepare_deterministic_paths",
+            fake_prepare_deterministic_paths,
+        )
+        monkeypatch.setattr(plot_module, "plot_paths", fake_plot_paths)
+
+        plot_deterministic_results(
+            result_labels=[("model", "base"), ("model", "alt")],
+            include_list=["A"],
+            plot_dir=tmp_path,
+            deviation_from=("model", "base"),
+        )
+
+        np.testing.assert_allclose(captured["path_vals"][0, :, 0], 0.0)
+        np.testing.assert_allclose(captured["path_vals"][1, :, 0], [2.0, 3.0])
+
+    def test_deviation_from_missing_or_ambiguous_raises(self, tmp_path):
+        """Baseline selectors must match exactly one plotted result."""
+        result1 = DeterministicResult(
+            UX=np.ones((3, 1)),
+            Z=np.zeros((3, 0)),
+            var_names=["A"],
+            exog_names=[],
+        )
+        result2 = DeterministicResult(
+            UX=np.ones((3, 1)) * 2.0,
+            Z=np.zeros((3, 0)),
+            var_names=["A"],
+            exog_names=[],
+        )
+
+        with pytest.raises(ValueError, match="did not match"):
+            plot_deterministic_results(
+                [result1, result2],
+                include_list=["A"],
+                plot_dir=tmp_path,
+                result_names=["One", "Two"],
+                deviation_from="Missing",
+            )
+
+        with pytest.raises(ValueError, match="matched multiple"):
+            plot_deterministic_results(
+                [result1, result2],
+                include_list=["A"],
+                plot_dir=tmp_path,
+                result_names=["Same", "Same"],
+                deviation_from="Same",
+            )
+
+    def test_deviation_include_and_exclude_vars_raise(self, tmp_path):
+        """Deviation include/exclude filters are mutually exclusive."""
+        result = DeterministicResult(
+            UX=np.ones((3, 2)),
+            Z=np.zeros((3, 0)),
+            var_names=["A", "B"],
+            exog_names=[],
+        )
+
+        with pytest.raises(ValueError, match="deviation_include_vars"):
+            plot_deterministic_results(
+                [result],
+                include_list=["A", "B"],
+                plot_dir=tmp_path,
+                result_names=["Baseline"],
+                deviation_from="Baseline",
+                deviation_include_vars=["A"],
+                deviation_exclude_vars=["B"],
+            )
+
+    def test_deviation_missing_exclude_vars_are_ignored(self, tmp_path, monkeypatch):
+        """Missing exclusion variables are ignored for blanket exclusion lists."""
+        result = DeterministicResult(
+            UX=np.array([[1.0, 10.0], [2.0, 20.0], [3.0, 30.0]]),
+            Z=np.zeros((3, 0)),
+            var_names=["A", "B"],
+            exog_names=[],
+        )
+        model = DeterministicResult(
+            UX=np.array([[2.0, 11.0], [4.0, 22.0], [6.0, 33.0]]),
+            Z=np.zeros((3, 0)),
+            var_names=["A", "B"],
+            exog_names=[],
+        )
+        captured = {}
+
+        def fake_plot_paths(**kwargs):
+            captured.update(kwargs)
+            return [tmp_path / "captured.pdf"]
+
+        monkeypatch.setattr(plot_module, "plot_paths", fake_plot_paths)
+
+        plot_deterministic_results(
+            [result, model],
+            include_list=["A", "B"],
+            plot_dir=tmp_path,
+            result_names=["Baseline", "Model"],
+            deviation_from="Baseline",
+            deviation_exclude_vars=["C"],
+        )
+
+        np.testing.assert_allclose(captured["path_vals"][0, :, :], 0.0)
+        np.testing.assert_allclose(
+            captured["path_vals"][1, :, :],
+            [[1.0, 1.0], [2.0, 2.0], [3.0, 3.0]],
+        )
+
+    def test_deviation_missing_include_vars_warn_and_are_ignored(
+        self, tmp_path, monkeypatch
+    ):
+        """Missing included variables warn and present variables are still used."""
+        baseline = DeterministicResult(
+            UX=np.array([[1.0, 10.0], [2.0, 20.0], [3.0, 30.0]]),
+            Z=np.zeros((3, 0)),
+            var_names=["A", "B"],
+            exog_names=[],
+        )
+        model = DeterministicResult(
+            UX=np.array([[2.0, 11.0], [4.0, 22.0], [6.0, 33.0]]),
+            Z=np.zeros((3, 0)),
+            var_names=["A", "B"],
+            exog_names=[],
+        )
+        captured = {}
+
+        def fake_plot_paths(**kwargs):
+            captured.update(kwargs)
+            return [tmp_path / "captured.pdf"]
+
+        monkeypatch.setattr(plot_module, "plot_paths", fake_plot_paths)
+
+        with pytest.warns(UserWarning, match="deviation_include_vars entries"):
+            plot_deterministic_results(
+                [baseline, model],
+                include_list=["A", "B"],
+                plot_dir=tmp_path,
+                result_names=["Baseline", "Model"],
+                deviation_from="Baseline",
+                deviation_include_vars=["A", "C"],
+            )
+
+        np.testing.assert_allclose(captured["path_vals"][1, :, 0], [1.0, 2.0, 3.0])
+        np.testing.assert_allclose(captured["path_vals"][1, :, 1], [11.0, 22.0, 33.0])
+
+    def test_deviation_all_missing_include_vars_warn_and_difference_none(
+        self, tmp_path, monkeypatch
+    ):
+        """If all included variables are missing, no variables are differenced."""
+        baseline = DeterministicResult(
+            UX=np.array([[1.0, 10.0], [2.0, 20.0], [3.0, 30.0]]),
+            Z=np.zeros((3, 0)),
+            var_names=["A", "B"],
+            exog_names=[],
+        )
+        model = DeterministicResult(
+            UX=np.array([[2.0, 11.0], [4.0, 22.0], [6.0, 33.0]]),
+            Z=np.zeros((3, 0)),
+            var_names=["A", "B"],
+            exog_names=[],
+        )
+        captured = {}
+
+        def fake_plot_paths(**kwargs):
+            captured.update(kwargs)
+            return [tmp_path / "captured.pdf"]
+
+        monkeypatch.setattr(plot_module, "plot_paths", fake_plot_paths)
+
+        with pytest.warns(UserWarning, match="deviation_include_vars entries"):
+            plot_deterministic_results(
+                [baseline, model],
+                include_list=["A", "B"],
+                plot_dir=tmp_path,
+                result_names=["Baseline", "Model"],
+                deviation_from="Baseline",
+                deviation_include_vars=["C"],
+            )
+
+        np.testing.assert_allclose(captured["path_vals"][0, :, :], baseline.UX)
+        np.testing.assert_allclose(captured["path_vals"][1, :, :], model.UX)
 
     def test_plot_sequence_result(self):
         """Test plotting a SequenceResult (auto-splice)."""
