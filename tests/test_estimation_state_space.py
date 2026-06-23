@@ -70,6 +70,56 @@ def test_kalman_filter_handles_missing_observations():
     assert not est.ix[1, 0]
 
 
+def test_kalman_filter_default_treats_init_as_first_prediction():
+    ssm = _make_scalar_ssm()
+    y = np.array([[1.2], [0.9]])
+    x_init = np.array([2.0])
+    P_init = np.array([[3.0]])
+
+    est = StateSpaceEstimates(ssm, y)
+    est.kalman_filter(x_init=x_init, P_init=P_init)
+
+    assert est.init_is_pred is True
+    np.testing.assert_allclose(est.x_init, x_init)
+    np.testing.assert_allclose(est.P_init, P_init)
+    np.testing.assert_allclose(est.x_pred[0], x_init)
+    np.testing.assert_allclose(est.P_pred[0], P_init)
+
+
+def test_kalman_filter_can_advance_initial_belief_before_first_observation():
+    ssm = _make_scalar_ssm()
+    y = np.array([[1.2], [0.9]])
+    x_init = np.array([2.0])
+    P_init = np.array([[3.0]])
+    expected_x_pred = ssm.A @ x_init
+    expected_P_pred = ssm.A @ P_init @ ssm.A.T + ssm.RQR
+
+    est = StateSpaceEstimates(ssm, y)
+    est.kalman_filter(x_init=x_init, P_init=P_init, init_is_pred=False)
+
+    assert est.init_is_pred is False
+    np.testing.assert_allclose(est.x_init, expected_x_pred)
+    np.testing.assert_allclose(est.P_init, expected_P_pred)
+    np.testing.assert_allclose(est.x_pred[0], expected_x_pred)
+    np.testing.assert_allclose(est.P_pred[0], expected_P_pred)
+
+
+def test_state_smoother_uses_effective_initial_prediction():
+    ssm = _make_scalar_ssm()
+    y = np.array([[1.2], [0.9]])
+    x_init = np.array([2.0])
+    P_init = np.array([[3.0]])
+
+    est = StateSpaceEstimates(ssm, y)
+    est.kalman_filter(x_init=x_init, P_init=P_init, init_is_pred=False)
+    est.state_smoother()
+
+    expected_x0 = est.x_init + est.P_init @ est.r[0, :]
+    raw_init_x0 = x_init + P_init @ est.r[0, :]
+    np.testing.assert_allclose(est.x_smooth[0], expected_x0)
+    assert not np.allclose(est.x_smooth[0], raw_init_x0)
+
+
 def test_smoothers_and_state_draw_shapes():
     np.random.seed(0)
     ssm = _make_vector_ssm()

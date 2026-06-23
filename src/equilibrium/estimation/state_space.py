@@ -292,6 +292,7 @@ class StateSpaceEstimates:
 
         self.x_init = x_init
         self.P_init = P_init
+        self.init_is_pred = True
 
         self.r = None
         self.state_draw = None
@@ -313,24 +314,18 @@ class StateSpaceEstimates:
 
         self.y_til = self.y - self.ssm.b[np.newaxis, :]
 
-    def kalman_filter(self, x_init=None, P_init=None, overwrite_r=True, y_til=None):
+    def kalman_filter(
+        self, x_init=None, P_init=None, overwrite_r=True, y_til=None, init_is_pred=True
+    ):
         """Run the Kalman filter on the observed data."""
         if overwrite_r:
             self.r = None
-
-        if x_init is not None:
-            self.x_init = x_init
-        if P_init is not None:
-            self.P_init = P_init
 
         if y_til is None:
             self.base_data_results = True
             y_til = self.y_til
         else:
             self.base_data_results = False
-
-        x_pred_t = self.x_init
-        P_pred_t = self.P_init
 
         Nt = self.Nt
         Nx = self.Nx
@@ -351,6 +346,22 @@ class StateSpaceEstimates:
         H = self.ssm.H
         RQR = self.ssm.RQR
         ix = self.ix
+
+        if x_init is None:
+            x_init = self.x_init
+        if P_init is None:
+            P_init = self.P_init
+
+        if init_is_pred:
+            self.x_init = x_init
+            self.P_init = P_init
+        else:
+            self.x_init = A @ x_init
+            self.P_init = A @ P_init @ A.T + RQR
+
+        self.init_is_pred = init_is_pred
+        x_pred_t = self.x_init
+        P_pred_t = self.P_init
 
         # Store references to result arrays for faster indexing.
         x_pred_arr = self.x_pred
