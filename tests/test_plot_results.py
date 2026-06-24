@@ -10,6 +10,7 @@ from pathlib import Path
 
 import jax
 import numpy as np
+import pandas as pd
 import pytest
 
 import equilibrium.plot.plot as plot_module
@@ -29,6 +30,7 @@ from equilibrium.solvers import deterministic
 from equilibrium.solvers.det_spec import DetSpec
 from equilibrium.solvers.results import (
     DeterministicResult,
+    IrfResult,
     SequenceResult,
     SeriesTransform,
 )
@@ -411,6 +413,60 @@ def test_plot_paths_adjust_y_axis_handles_non_finite_values(tmp_path):
     assert paths
     for path in paths:
         assert path.exists()
+
+
+def test_plot_paths_saves_tidy_csv_for_plotted_values(tmp_path):
+    """plot_paths can save the same values it plots as a tidy CSV."""
+    paths = plot_paths(
+        path_vals=np.array(
+            [
+                [[1.0, 10.0], [2.0, 20.0], [3.0, 30.0]],
+                [[4.0, 40.0], [5.0, 50.0], [6.0, 60.0]],
+            ]
+        ),
+        full_list=["A", "B"],
+        include_list=["B"],
+        title_str=None,
+        x_str="Period",
+        prefix="csv_paths",
+        group_names=["Baseline", "Alternative"],
+        plot_dir=tmp_path,
+        plot_type="png",
+        drop_obs=1,
+        save_csv=True,
+        announce_dir=False,
+    )
+
+    assert paths
+    csv_path = tmp_path / "csv_paths.csv"
+    assert csv_path.exists()
+
+    df = pd.read_csv(csv_path)
+    assert list(df.columns) == ["period", "variable", "group", "value"]
+    assert df.to_dict("records") == [
+        {"period": 1, "variable": "B", "group": "Baseline", "value": 20.0},
+        {"period": 1, "variable": "B", "group": "Alternative", "value": 50.0},
+        {"period": 2, "variable": "B", "group": "Baseline", "value": 30.0},
+        {"period": 2, "variable": "B", "group": "Alternative", "value": 60.0},
+    ]
+
+
+def test_plot_paths_does_not_save_csv_by_default(tmp_path):
+    """Direct plot_paths calls remain CSV opt-in."""
+    plot_paths(
+        path_vals=np.array([[[1.0], [2.0]]]),
+        full_list=["A"],
+        include_list=["A"],
+        title_str=None,
+        x_str="Period",
+        prefix="no_csv_paths",
+        group_names=["Baseline"],
+        plot_dir=tmp_path,
+        plot_type="png",
+        announce_dir=False,
+    )
+
+    assert not (tmp_path / "no_csv_paths.csv").exists()
 
 
 def test_plot_paths_uses_compact_y_tick_labels(tmp_path, monkeypatch):
@@ -846,6 +902,59 @@ class TestPlotDeterministicResults:
             assert len(paths) > 0
             for path in paths:
                 assert path.exists()
+
+    def test_plot_deterministic_results_saves_csv_by_default(self, tmp_path):
+        """plot_deterministic_results writes prepared values to results.csv."""
+        result = DeterministicResult(
+            UX=np.array([[1.0, 10.0], [2.0, 20.0]]),
+            Z=np.zeros((2, 0)),
+            var_names=["A", "B"],
+            exog_names=[],
+        )
+
+        paths = plot_deterministic_results(
+            [result],
+            include_list=["A"],
+            plot_dir=tmp_path,
+            subdir_name="csv_case",
+            result_names=["Baseline"],
+            plot_type="png",
+            announce_dir=False,
+        )
+
+        assert paths
+        csv_path = tmp_path / "csv_case" / "results.csv"
+        assert csv_path.exists()
+        assert csv_path not in paths
+
+        df = pd.read_csv(csv_path)
+        assert df.to_dict("records") == [
+            {"period": 0, "variable": "A", "group": "Baseline", "value": 1.0},
+            {"period": 1, "variable": "A", "group": "Baseline", "value": 2.0},
+        ]
+
+    def test_plot_deterministic_results_can_disable_csv(self, tmp_path):
+        """plot_deterministic_results can opt out of CSV export."""
+        result = DeterministicResult(
+            UX=np.array([[1.0], [2.0]]),
+            Z=np.zeros((2, 0)),
+            var_names=["A"],
+            exog_names=[],
+        )
+
+        plot_deterministic_results(
+            [result],
+            include_list=["A"],
+            plot_dir=tmp_path,
+            subdir_name="no_csv_case",
+            result_names=["Baseline"],
+            prefix="det_no_csv",
+            plot_type="png",
+            save_csv=False,
+            announce_dir=False,
+        )
+
+        assert not (tmp_path / "no_csv_case" / "det_no_csv.csv").exists()
 
     def test_deviation_from_string_subtracts_transformed_baseline(
         self, tmp_path, monkeypatch
@@ -1643,6 +1752,78 @@ class TestPlotDeterministicResults:
 
 class TestPlotModelIrfs:
     """Tests for plot_model_irfs function."""
+
+    def test_plot_irf_results_saves_one_csv_per_shock(self, tmp_path):
+        """plot_irf_results writes shock-specific CSV files by default."""
+        irf_results = {
+            "eps_a": IrfResult(
+                UX=np.array([[1.0], [2.0]]),
+                Z=np.zeros((2, 0)),
+                var_names=["A"],
+                exog_names=[],
+                model_label="m1",
+                shock_name="eps_a",
+            ),
+            "eps_b": IrfResult(
+                UX=np.array([[3.0], [4.0]]),
+                Z=np.zeros((2, 0)),
+                var_names=["A"],
+                exog_names=[],
+                model_label="m1",
+                shock_name="eps_b",
+            ),
+        }
+
+        paths = plot_irf_results(
+            irf_results,
+            include_list=["A"],
+            plot_dir=tmp_path,
+            result_names=["Model"],
+            plot_type="png",
+            announce_dir=False,
+        )
+
+        assert paths
+        csv_a = tmp_path / "irf_to_eps_a.csv"
+        csv_b = tmp_path / "irf_to_eps_b.csv"
+        assert csv_a.exists()
+        assert csv_b.exists()
+        assert csv_a not in paths
+        assert csv_b not in paths
+
+        df_a = pd.read_csv(csv_a)
+        df_b = pd.read_csv(csv_b)
+        assert df_a["value"].tolist() == [1.0, 2.0]
+        assert df_b["value"].tolist() == [3.0, 4.0]
+
+    def test_plot_irf_results_rejects_custom_csv_filename_for_multiple_shocks(
+        self, tmp_path
+    ):
+        """A single custom CSV filename is only valid for a single shock."""
+        irf_results = {
+            "eps_a": IrfResult(
+                UX=np.ones((2, 1)),
+                Z=np.zeros((2, 0)),
+                var_names=["A"],
+                exog_names=[],
+                shock_name="eps_a",
+            ),
+            "eps_b": IrfResult(
+                UX=np.ones((2, 1)),
+                Z=np.zeros((2, 0)),
+                var_names=["A"],
+                exog_names=[],
+                shock_name="eps_b",
+            ),
+        }
+
+        with pytest.raises(ValueError, match="csv_filename"):
+            plot_irf_results(
+                irf_results,
+                include_list=["A"],
+                plot_dir=tmp_path,
+                csv_filename="custom.csv",
+            )
 
     def test_plot_single_model(self):
         """Test plotting IRFs from a single model."""

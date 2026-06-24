@@ -235,6 +235,47 @@ def _compute_irf_ylim(
     return (ymin - pad_frac * span, ymax + pad_frac * span)
 
 
+def _save_plot_paths_csv(
+    *,
+    arr: np.ndarray,
+    include_list: Sequence[str],
+    var_indices: Sequence[int],
+    group_names: Optional[Sequence[str]],
+    group_indices: Sequence[int],
+    grid: np.ndarray,
+    drop_obs: int,
+    csv_path: Path,
+) -> None:
+    """Save plotted path values in tidy long-form CSV format."""
+    import pandas as pd
+
+    rows = []
+    if group_names is None:
+        csv_group_names = ["Group 0"]
+        csv_group_indices = [0]
+    else:
+        csv_group_names = [group_names[i] for i in group_indices]
+        csv_group_indices = list(group_indices)
+
+    for period, t in enumerate(grid):
+        arr_period = drop_obs + period
+        for var_name, var_idx in zip(include_list, var_indices):
+            for group_name, group_idx in zip(csv_group_names, csv_group_indices):
+                rows.append(
+                    {
+                        "period": t,
+                        "variable": var_name,
+                        "group": group_name,
+                        "value": arr[group_idx, arr_period, var_idx],
+                    }
+                )
+
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(rows, columns=["period", "variable", "group", "value"]).to_csv(
+        csv_path, index=False
+    )
+
+
 def plot_paths(
     path_vals: np.ndarray,
     full_list: Sequence[str],
@@ -290,6 +331,8 @@ def plot_paths(
     announce_dir: bool = True,
     print_periods: Optional[Sequence[int]] = None,
     print_vars: Optional[Sequence[str]] = None,
+    save_csv: bool = False,
+    csv_filename: Optional[Union[str, Path]] = None,
 ) -> List[Path]:
     """
     Plot time-series paths by variable, optionally grouped with confidence bands.
@@ -364,6 +407,11 @@ def plot_paths(
         into the path array (before any custom ``grid`` transformation).
     print_vars : Sequence[str], optional
         Variables to include in the printed tables. Defaults to ``include_list``.
+    save_csv : bool, default False
+        Whether to save the plotted values as a tidy long-form CSV file.
+    csv_filename : str or Path, optional
+        CSV filename to write. Relative paths are resolved inside ``plot_dir``.
+        Defaults to ``f"{prefix}.csv"`` when ``save_csv`` is true.
 
     Returns
     -------
@@ -416,6 +464,10 @@ def plot_paths(
     if grid is None:
         grid = np.arange(drop_obs, nt, dtype=int)
     grid = np.asarray(grid)
+    if len(grid) != nt - drop_obs:
+        raise ValueError(
+            f"grid length ({len(grid)}) must match plotted periods ({nt - drop_obs})."
+        )
 
     if lw is None:
         lw = 1.5 if style == "irf" else 1.0
@@ -462,6 +514,12 @@ def plot_paths(
     group_index = {}
     if group_names is not None:
         group_index = {g: group_names.index(g) for g in group_names}
+
+    csv_path: Optional[Path] = None
+    if save_csv:
+        csv_path = Path(csv_filename) if csv_filename is not None else Path(f"{prefix}.csv")
+        if not csv_path.is_absolute():
+            csv_path = plot_dir / csv_path
 
     if print_periods is not None:
         if print_vars is None:
@@ -513,6 +571,30 @@ def plot_paths(
                 f.unlink()
             except OSError:
                 pass
+        if csv_path is not None:
+            try:
+                csv_path.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError:
+                pass
+
+    if csv_path is not None:
+        group_indices = (
+            [group_index[g] for g in base_group_names]
+            if base_group_names is not None
+            else [0]
+        )
+        _save_plot_paths_csv(
+            arr=arr,
+            include_list=include_list,
+            var_indices=var_indices,
+            group_names=group_names,
+            group_indices=group_indices,
+            grid=grid,
+            drop_obs=drop_obs,
+            csv_path=csv_path,
+        )
 
     # --- pagination loop ---
     total_done = 0
@@ -1078,6 +1160,8 @@ def plot_deterministic_results(
     plot_deviation_baseline: bool = True,
     deviation_include_vars: Optional[Sequence[str]] = None,
     deviation_exclude_vars: Optional[Sequence[str]] = None,
+    save_csv: bool = True,
+    csv_filename: Optional[Union[str, Path]] = None,
     **kwargs,
 ) -> List[Path]:
     """
@@ -1189,6 +1273,11 @@ def plot_deterministic_results(
     deviation_exclude_vars : Sequence[str], optional
         Prepared variable names to leave in original units/levels when plotting
         deviations. Cannot be combined with nonempty ``deviation_include_vars``.
+    save_csv : bool, default True
+        Whether to save the plotted values as a tidy long-form CSV file.
+    csv_filename : str or Path, optional
+        CSV filename to write. Relative paths are resolved inside the plot
+        directory. Defaults to ``f"{prefix}.csv"``.
     **kwargs
         Additional keyword arguments passed to plot_paths.
 
@@ -1448,6 +1537,8 @@ def plot_deterministic_results(
     merged_kwargs = _expand_group_style_dicts(
         aliased_kwargs, name_to_parts, style_level
     )
+    merged_kwargs.pop("save_csv", None)
+    merged_kwargs.pop("csv_filename", None)
 
     return plot_paths(
         path_vals=prep.path_vals,
@@ -1459,6 +1550,8 @@ def plot_deterministic_results(
         group_names=prep.result_names,
         plot_dir=plot_dir,
         plot_type=plot_type,
+        save_csv=save_csv,
+        csv_filename=csv_filename,
         **merged_kwargs,
     )
 
@@ -1481,6 +1574,8 @@ def plot_model_irfs(
     n_periods: Optional[int] = None,
     shock_size: Union[float, dict[str, float]] = 1.0,
     plot_spec: Optional[PlotSpec] = None,
+    save_csv: bool = True,
+    csv_filename: Optional[Union[str, Path]] = None,
     **kwargs,
 ) -> List[Path]:
     """
@@ -1542,6 +1637,12 @@ def plot_model_irfs(
         standard deviation from the first model's parameters (SIG_<shock>).
     plot_spec : PlotSpec, optional
         Bundle of plot styling options passed through to plot_paths.
+    save_csv : bool, default True
+        Whether to save the plotted values as tidy long-form CSV files.
+    csv_filename : str or Path, optional
+        CSV filename to write. Relative paths are resolved inside the plot
+        directory. Only use with a single shock; otherwise each shock uses its
+        own ``prefix``-derived filename.
     **kwargs
         Additional keyword arguments passed to plot_paths.
 
@@ -1612,6 +1713,8 @@ def plot_model_irfs(
 
     plot_kwargs = plot_spec.to_kwargs() if plot_spec is not None else {}
     merged_kwargs = {**plot_kwargs, **kwargs}
+    merged_kwargs.pop("save_csv", None)
+    merged_kwargs.pop("csv_filename", None)
     if "announce_dir" not in merged_kwargs:
         merged_kwargs["announce_dir"] = False
 
@@ -1734,6 +1837,8 @@ def plot_model_irfs(
         x_str=x_str,
         n_periods=n_periods,
         shock_size=shock_size_for_results,
+        save_csv=save_csv,
+        csv_filename=csv_filename,
         **merged_kwargs,
     )
 
@@ -1756,6 +1861,8 @@ def plot_irf_results(
     x_str: str = "Period",
     n_periods: Optional[int] = None,
     shock_size: Union[float, dict[str, float]] = 1.0,
+    save_csv: bool = True,
+    csv_filename: Optional[Union[str, Path]] = None,
     **kwargs,
 ) -> List[Path]:
     """
@@ -1810,6 +1917,12 @@ def plot_irf_results(
         Scaling factor(s) applied to the IRFs before plotting. If a float,
         the same size is used for all shocks. If a dict, maps shock names
         to their sizes. For shocks not in the dict, defaults to 1.0.
+    save_csv : bool, default True
+        Whether to save the plotted values as tidy long-form CSV files.
+    csv_filename : str or Path, optional
+        CSV filename to write. Relative paths are resolved inside the plot
+        directory. Only use with a single shock; otherwise each shock uses its
+        own ``prefix``-derived filename.
     **kwargs
         Additional keyword arguments passed to plot_paths.
 
@@ -1903,6 +2016,8 @@ def plot_irf_results(
 
     if not shocks:
         raise ValueError("No shocks found in irf_results")
+    if csv_filename is not None and len(shocks) != 1:
+        raise ValueError("csv_filename can only be used when plotting a single shock.")
 
     # Extract var_titles from kwargs to use for shock labels
     var_titles = kwargs.get("var_titles", {}) or {}
@@ -2027,6 +2142,8 @@ def plot_irf_results(
             group_names=result_labels,
             plot_dir=plot_dir,
             plot_type=plot_type,
+            save_csv=save_csv,
+            csv_filename=csv_filename,
             **kwargs,
         )
         all_paths.extend(paths)
