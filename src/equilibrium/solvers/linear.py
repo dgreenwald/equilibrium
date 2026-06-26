@@ -297,7 +297,7 @@ def solve_sequence_linear(
                 else:
                     z_init_for_y = np.asarray(current_z_init)
                 y_init_regime = _compute_initial_intermediates(
-                    base_mod, UX[0], z_init_for_y
+                    current_mod, UX[0], z_init_for_y
                 )
 
             if y_init_regime is not None:
