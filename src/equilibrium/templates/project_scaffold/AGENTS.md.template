@@ -1,0 +1,442 @@
+# AGENTS.md — Equilibrium Project
+
+This file describes the architecture, conventions, and workflows for a project built on the [`equilibrium`](https://github.com/dgreenwald/equilibrium) package. Any AI agent or contributor working in this repository should read it before making changes.
+
+## Overview
+
+This is a dynamic general-equilibrium model built with the `equilibrium` package — a JAX-based solver for defining and solving economic models via rule-based model specification, automatic code generation, and JIT-compiled solvers.
+
+Models are assembled from reusable `ModelBlock` components, configured through feature flags and parameter dictionaries, and solved via steady-state calibration, linearization, and deterministic/stochastic simulation.
+
+## Project Structure
+
+A typical project has the following flat layout:
+
+```
+project/
+├── main.py              # Orchestration: run_type selection, CONFIGS, solver calls
+├── model.py             # Model assembly: create_model() → Model
+├── blocks.py            # Local ModelBlock definitions (project-specific)
+├── parameters.py        # get_params(flags), get_steady_guess(flags, params)
+├── specifications.py    # configure_model(), configure_experiment()
+├── constants.py         # Plot variables, titles, styles, series transforms
+├── plot_deterministic.py  # Plot saved deterministic / sequence results
+├── plot_irfs.py         # Plot impulse response functions
+├── .env                 # EQUILIBRIUM_PATHS__DATA_DIR and other settings
+├── Makefile             # Build targets for each run_type
+└── AGENTS.md            # This file
+```
+
+**Optional files** added as the project grows:
+- `fit_specifications.py` / `fit_manager.py` — parameter fitting to regression targets
+- `fit_time_series_specifications.py` / `fit_time_series_manager.py` — Kalman filter/smoother
+- `data_manager.py` — empirical data loading and processing
+- `model_regressions.py` — regression coefficient computation from model output
+- `plot_utils.py` — shared plotting helpers (e.g., `PlotItem` dataclass)
+- `test_*.py` — ad-hoc validation scripts
+
+## Core Architecture
+
+### Data Flow
+
+```
+CONFIGS[run_type] → RunItem(mod_spec, experiments)
+    ↓
+configure_model(mod_spec) → (flags, params, mod_spec)
+    ↓
+create_model(flags, params, label) → Model
+    ↓
+mod.solve_steady() → mod.linearize() → solver calls
+    ↓
+configure_experiment(exper) → (DetSpec, exper)
+    ↓
+solve_sequence() or solve_sequence_linear() → results
+    ↓
+plot_deterministic_results() / plot_model_irfs()
+```
+
+### File Roles
+
+#### `main.py` — Orchestration
+
+- Defines `CONFIGS`: a dict mapping run types (e.g., `'steady'`, `'deterministic'`, `'fit_deterministic'`, `'irfs'`) to lists of `RunItem` objects.
+- Each `RunItem(mod_spec, experiments)` bundles a model specification with zero or more experiment specifications.
+- Iterates over `RunItem`s: calls `configure_model()` → `create_model()` → runs the appropriate solver.
+- `run_type` is selected by editing a variable near the top or via `--run-type` CLI argument.
+
+#### `model.py` — Model Assembly
+
+- Contains `create_model(flags, params, steady_guess, label, **kwargs) → Model`.
+- Follows this standard pattern:
+
+```python
+def create_model(flags=None, params=None, steady_guess=None, label="baseline", **kwargs):
+    default_flags = { ... }
+    flags = {**default_flags, **(flags or {})}
+
+    mod = Model(flags=flags, params=params, label=label, **kwargs)
+    mod.params.update(get_params(mod.flags))
+    mod.steady_guess.update(get_steady_guess(mod.flags, mod.params))
+
+    # Add exogenous processes
+    mod.exog_list += ['log_Z_til', ...]
+
+    # Add equations by category
+    mod.rules['intermediate'] += [...]
+    mod.rules['expectations'] += [...]
+    mod.rules['transition'] += [...]
+    mod.rules['optimality'] += [...]
+
+    # Add reusable blocks
+    mod.add_block(my_block(), rename={'AGENT': 'C', 'ATYPE': 'C'})
+
+    # Calibration equations
+    mod.rules['calibration'] += [...]
+
+    mod.finalize()  # CRITICAL: must call before solving
+    return mod
+```
+
+#### `blocks.py` — Model Blocks
+
+- Defines project-specific `ModelBlock` components using the `@model_block` decorator:
+
+```python
+from equilibrium.model import model_block
+
+@model_block
+def my_block(block, *, some_flag=False):
+    block.rules['intermediate'] += [
+        ('var_AGENT', 'expression using param_ATYPE'),
+    ]
+    if some_flag:
+        block.rules['optimality'] += [
+            ('control_AGENT', 'first_order_condition'),
+        ]
+```
+
+- Blocks use **placeholder names** (e.g., `AGENT`, `ATYPE`, `INSTRUMENT`, `_GROUP`) that are substituted when added to the model via `mod.add_block(block, rename={...})`.
+- Name block factory functions with the `_block` suffix.
+
+**Framework-provided blocks** (from `equilibrium.blocks`):
+- `preference_block(agent, atype, housing, labor, util_type)` — utility function with automatic SymPy differentiation
+- `investment_block(tv_inv_efficiency)` — quadratic adjustment costs
+- `st_bond_block(include_lag)` — short-term bond pricing (Euler equation)
+- `debt_block(tv_prepayment, detrend)` — long-term debt pricing with principal/spread decomposition
+
+#### `parameters.py` — Parameters & Guesses
+
+- `get_params(flags) → dict`: returns the full parameter dictionary. Parameters may depend on flags.
+- `get_steady_guess(flags, params) → dict`: returns initial steady-state guesses.
+- Exogenous shock parameters follow the naming convention `PERS_<shock_name>` (persistence) and `VOL_<shock_name>` (volatility).
+
+#### `specifications.py` — Model Variants & Experiments
+
+- `configure_model(base_mod_spec, flags, params) → (flags, params, ModSpec)`: translates human-readable feature labels into flag/parameter overrides.
+- `configure_experiment(base_exper, ...) → (DetSpec, exper)`: builds a `DetSpec` with regime-based shocks and preset parameters.
+- `ModSpec` normalizes feature lists into canonical labels: `ModSpec(['baseline', 'no_mtm'])` → label `"baseline_no_mtm"`. Supports membership checks: `'no_mtm' in mod_spec`.
+
+#### `constants.py` — Plot Configuration
+
+- `plot_vars`: list of variable names to include in plots.
+- `var_titles`: dict mapping variable names to display titles.
+- `series_transforms`: dict mapping variable names to `SeriesTransform` objects for unit conversions (log-to-level, differencing, percentage).
+- `mod_labels_colors_styles_markers`: dict defining display names, colors, line styles, and markers for model variants.
+- `plot_spec`: a `PlotSpec` object bundling all styling for reuse.
+
+## Equation System
+
+### Rule Categories
+
+| Category | Purpose | Example |
+|----------|---------|---------|
+| `intermediate` | Within-period calculations, identities | `('y', 'Z * (K ** alp)')` |
+| `expectations` | Forward-looking equations (use `_NEXT` suffix) | `('E_Om_K', 'bet * (uc_NEXT / uc) * Rk_NEXT')` |
+| `transition` | State evolution | `('log_K', 'np.log(K_new)')` |
+| `optimality` | First-order conditions (residual form, = 0) | `('I', 'E_Om_K - 1.0')` |
+| `calibration` | Steady-state parameter calibration (residual form) | `('bet', 'K - K_target')` |
+| `analytical_steady` | Closed-form steady-state solutions | `('R_new', 'pi_bar / bet_S')` |
+| `derived_param` | Computed parameter values (evaluated once) | `('bet_pi', 'bet / pi_bar')` |
+
+### Variable Classifications (Automatic)
+
+| Type | Description |
+|------|-------------|
+| `u` | Unknown/endogenous variables (solved by optimality) |
+| `x` | State variables (evolve via transition) |
+| `z` | Exogenous shock processes |
+| `params` | Model parameters |
+| `E` | Expectation variables (forward-looking) |
+
+### Equation Syntax
+
+- Equations are `(variable_name, expression_string)` tuples.
+- Expressions use NumPy (`np.exp`, `np.log`, `np.sqrt`) and JAX functions (`jax.scipy.special.erf`).
+- `_NEXT` suffix denotes next-period values in expectations: `uc_NEXT`, `K_NEXT`.
+- `_STEADY` suffix references the steady-state value of a variable.
+- `_bar` suffix by convention denotes a target or steady-state parameter value.
+- `_new` suffix by convention denotes an end-of-period value.
+- `_lag` suffix by convention denotes a previous-period value.
+- `_til` suffix denotes a deviation from steady state (used for shock processes).
+
+### Block Placeholder System
+
+Blocks use placeholder names that are substituted via `rename={}` when the block is added:
+
+```python
+# In blocks.py — generic definition
+@model_block
+def firm_block(block):
+    block.rules['intermediate'] += [
+        ('output_AGENT', 'Z * (K_AGENT ** alp_ATYPE)'),
+    ]
+
+# In model.py — instantiation for specific agents
+mod.add_block(firm_block(), rename={'AGENT': 'C', 'ATYPE': 'C'})
+mod.add_block(firm_block(), rename={'AGENT': 'U', 'ATYPE': 'U'})
+```
+
+**Common placeholder conventions**:
+- `AGENT` — agent identifier (e.g., `C`, `U`, `S`, `B`)
+- `ATYPE` — agent type for shared parameters (e.g., `C` for all constrained firm variants)
+- `INSTRUMENT` — financial instrument (e.g., `debt`, `loan`)
+- `BANK`, `BTYPE` — bank identifiers
+- `_GROUP`, `_AGE`, `_PREV`, `_FOLLOWING` — life-cycle or group identifiers
+
+**Suffix parameter**: `add_block` also accepts `suffix` and `suffix_before` for appending identifiers:
+
+```python
+mod.add_block(block, suffix='_sector1')
+mod.add_block(block, suffix='_firm', suffix_before=['_AGENT'])  # suffix inserted before placeholder
+```
+
+## Exogenous Processes
+
+Add exogenous AR(1) shock processes:
+
+```python
+mod.exog_list += ['log_Z_til']  # Manual: requires PERS_ and VOL_ params
+mod.add_exog('log_Z_til', pers=0.95, vol=0.01)  # Convenience: adds params automatically
+```
+
+Parameters follow the naming convention:
+- `PERS_log_Z_til` — AR(1) persistence coefficient
+- `VOL_log_Z_til` — innovation standard deviation
+
+## Solver Workflow
+
+### Steady State
+```python
+mod.solve_steady(calibrate=True, save=True, load_initial_guess=True)
+```
+
+### Linearization & IRFs
+```python
+mod.linearize()
+mod.compute_linear_irfs(Nt_irf=20)
+```
+
+### Deterministic Experiments (DetSpec)
+
+`DetSpec` defines multi-regime scenarios with piecewise-constant parameter changes and/or exogenous shock paths:
+
+```python
+from equilibrium import DetSpec
+from equilibrium.solvers import deterministic, linear
+
+det_spec = DetSpec(label='experiment_name')
+det_spec.add_regime(preset_par_regime={'param': new_value})
+det_spec.add_regime(preset_par_regime={...}, time_regime=20)  # regime change at t=20
+
+# Nonlinear solve
+res = deterministic.solve_sequence(det_spec, mod, Nt)
+
+# Linear solve
+res = linear.solve_sequence_linear(det_spec, mod, Nt)
+```
+
+### Calibration
+
+**Basic** (steady-state parameter calibration via rules):
+```python
+mod.rules['calibration'] += [('bet', 'K - K_target')]
+mod.solve_steady(calibrate=True)
+```
+
+**Advanced** (dynamic calibration to targets):
+```python
+from equilibrium import calibrate, PointTarget, RegimeParam, ModelParam
+
+targets = [PointTarget(var_name='K', target=6.0, regime=0)]
+params_to_cal = [ModelParam(name='bet', initial_guess=0.95)]
+result = calibrate(mod, targets, params_to_cal, spec=det_spec, Nt=100)
+```
+
+### Saving & Loading
+
+```python
+from equilibrium import read_steady_value, read_calibrated_param
+
+# Steady-state values
+val = read_steady_value('K', label='baseline')
+
+# Calibrated parameters
+bet = read_calibrated_param('bet', label='baseline', regime=0)
+
+# Results
+from equilibrium import load_sequence_result, load_deterministic_result
+result = load_sequence_result('model_label', 'experiment_label')
+```
+
+## Variable Naming Conventions
+
+| Pattern | Meaning | Example |
+|---------|---------|---------|
+| `var_X` | Variable for agent X | `debt_C`, `K_U` |
+| `log_var` | Log-transformed variable | `log_K`, `log_Z` |
+| `var_bar` | Steady-state / target value | `K_bar`, `ltv_bar` |
+| `var_new` | End-of-period value | `K_new`, `M_new` |
+| `var_lag` | Previous-period value | `R_lag` |
+| `var_til` | Deviation from steady state | `log_Z_til` |
+| `E_var` | Expectation variable | `E_Om_K`, `E_Lam_S` |
+| `PERS_var` | AR(1) persistence | `PERS_log_Z_til` |
+| `VOL_var` | Shock volatility | `VOL_log_Z_til` |
+| `var_bank_X` | Bank-level variable | `V_afs_bank_C` |
+
+## Plotting
+
+```python
+from equilibrium.plot import plot_deterministic_results, plot_model_irfs, PlotSpec
+
+# IRFs
+plot_model_irfs([mod], include_list=K.plot_vars, plot_spec=K.plot_spec)
+
+# Deterministic results
+plot_deterministic_results(
+    result_labels=[('baseline', 'experiment')],
+    include_list=K.plot_vars,
+    plot_spec=K.plot_spec,
+)
+
+# With data overlay
+plot_deterministic_results(
+    [result],
+    overlay_data=empirical_data,
+    overlay_name="Data",
+    overlay_style='dashed',
+)
+```
+
+### Series Transforms
+
+```python
+from equilibrium import SeriesTransform
+
+series_transforms = {
+    'log_Y': SeriesTransform(log_to_level=True),                    # exp() before plotting
+    'inflation': SeriesTransform(diff=True, to_percent=True),       # Δ then ×100
+    'spread': SeriesTransform(scale=400.0),                         # annualize quarterly rate
+}
+```
+
+## Development Commands
+
+```bash
+# Run the model (uses run_type near top of main.py)
+python main.py
+
+# Run with a specific profile
+python main.py --run-type steady
+
+# REPL access after a configured run
+python -i main.py
+
+# Syntax and import validation
+python -m py_compile main.py model.py blocks.py parameters.py specifications.py
+
+# For isolated environments (no Dropbox/shared data dir)
+mkdir -p local_data
+EQUILIBRIUM_PATHS__DATA_DIR=$(pwd)/local_data python main.py
+```
+
+## Environment Configuration
+
+The `equilibrium` package uses Pydantic-based settings with the `EQUILIBRIUM_` prefix:
+
+```bash
+# .env file or shell exports
+EQUILIBRIUM_PATHS__DATA_DIR=~/Dropbox/output/project_name   # output directory
+EQUILIBRIUM_LOGGING__ENABLED=true                            # enable logging
+EQUILIBRIUM_LOGGING__LEVEL=INFO                              # log level
+```
+
+Settings are accessed in code via:
+```python
+from equilibrium.settings import get_settings
+settings = get_settings()
+print(settings.paths.data_dir)   # resolved output directory
+print(settings.paths.save_dir)   # data_dir/cache
+print(settings.paths.plot_dir)   # data_dir/plots
+```
+
+## Coding Conventions
+
+- Follow PEP 8: 4-space indentation, `snake_case` for functions and variables.
+- Name `ModelBlock` factory functions with the `_block` suffix.
+- Use placeholder names in blocks (`AGENT`, `ATYPE`, etc.) so `add_block(..., rename={...})` can instantiate them for multiple agents.
+- Store calibration targets in `mod.params` with descriptive names.
+- Suffix agent-specific variables with the agent tag (e.g., `_U`, `_C`, `_S`).
+- Add every new parameter to `get_params()` with an inline comment.
+- Add initial guesses for new endogenous variables to `get_steady_guess()`.
+- Always call `mod.finalize()` at the end of `create_model()`.
+- Never hard-code file paths; use `settings.paths` or `resolve_output_path()`.
+
+## Common Workflows
+
+**Add a new parameter:**
+1. Add to `get_params()` in `parameters.py` with a comment.
+2. Use in the relevant equation in `model.py` or `blocks.py`.
+3. Run `python main.py` to validate.
+
+**Add a new block:**
+1. Define `new_block()` in `blocks.py` using `@model_block`.
+2. Populate `block.rules['intermediate']`, `block.rules['optimality']`, etc.
+3. Call `mod.add_block(new_block(), rename={...})` in `create_model()`.
+4. Add initial guesses to `get_steady_guess()` if needed.
+
+**Create a model variant:**
+1. Add a `RunItem` entry to `CONFIGS[run_type]` in `main.py`.
+2. Handle the feature label in `configure_model()` in `specifications.py`.
+3. Add conditional logic in `create_model()` if needed.
+
+**Add a deterministic experiment:**
+1. Define experiment handling in `configure_experiment()` in `specifications.py`.
+2. Add preset parameter changes and/or shock sequences to the `DetSpec`.
+3. Add a `RunItem` with the experiment list in `CONFIGS['deterministic']`.
+
+**Run the full pipeline:**
+```bash
+make all     # or manually:
+python main.py --run-type steady
+python main.py --run-type deterministic
+python main.py --run-type irfs
+python plot_deterministic.py
+python plot_irfs.py
+```
+
+## Testing and Validation
+
+- **Steady-state convergence** is the primary validation: after model edits, run `python main.py` with `run_type = 'steady'` and confirm convergence.
+- **Deterministic / linear-sequence solves** serve as regression tests: confirm the solver converges and saved output matches expectations.
+- Use `python -m py_compile` for lightweight syntax validation.
+- For block-level debugging, use `python -i main.py` for interactive exploration.
+- Document new shocks or parameters with inline comments.
+
+## Dependencies
+
+- **equilibrium**: The core modeling framework. Must be installed (`pip install -e .`) or available on `PYTHONPATH`.
+  - Source: `~/dev/equilibrium` (or wherever installed)
+  - Docs: See `README.md` and `CLAUDE.md` in the equilibrium repo
+- **JAX**: Required by equilibrium for automatic differentiation and JIT compilation.
+- **NumPy, SciPy, Matplotlib**: Standard scientific Python stack.
+- **py_tools** (optional): Utility package for regressions, I/O, and data manipulation.
