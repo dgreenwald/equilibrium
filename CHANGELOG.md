@@ -5,7 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.4.0] - 2026-07-18
+
+### Added
+- **Custom calibration workflows**: Added the public `calibrate_custom()` API for calibrating model parameters against user-provided solution builders, with support for saved initial values, verbose diagnostics, returned solutions, and numerical-gradient options
+- **Calibration diagnostics and controls**: Added verbose target reporting, `gradient_kwargs` forwarding to the Newton solver, and additional warm-start support
+- **Plot deviations from another result**: Deterministic plots can use a selected model or experiment as a baseline, optionally limit differencing to selected variables, control overlay differencing, hide the baseline, and customize labels
+- **Plot data exports**: Deterministic and IRF plotting functions can save plotted values as tidy CSV files, with configurable filenames
+- **Overlay-specific transforms**: Plot overlays can use transforms independent of the model-result transforms
+- **Steady states on results**: Deterministic, sequence, and IRF result objects now carry aligned endogenous, exogenous, and intermediate steady-state values through save/load and splice operations
+- **Linear initial conditions in deviations**: `solve_sequence_linear()` accepts `ux_init_mode="deviations"` in addition to level initial conditions
+- **LaTeX precision controls**: Steady-state solvers and exports accept shared or variable/parameter-specific float formats
+- **State-space options**: State-space construction and likelihood evaluation support data expressed in deviations, and Kalman filtering can distinguish a predicted initial belief from a pre-transition initial state
+- **Run metadata**: `RunItem` accepts arbitrary user metadata and preserves it when replacing experiments
+- **Project scaffolding**: Added an `AGENTS.md` project template and a second scaffold layout with separate model, parameter, specification, constant, and main modules
+
+### Changed
+- Deterministic path preparation now includes exogenous variables and applies `T_max` consistently to deterministic and sequence results
+- Plot axis selection and tick formatting now handle small ranges, non-finite values, zero reference lines, and decimal precision more robustly
+- Plot output directories with excessively long names are shortened using a stable hash
+- `SeriesTransform.as_changes` can be combined with differencing and other transforms
+- Calibration internals now share a common optimization loop across standard and custom workflows
+- The debt block's detrending behavior was updated
+
+### Fixed
+- Linear sequence solutions now use the correct regime model and preserve the computed intermediate variables for the initial period
+- Linear sequence timing and exogenous-state handoff were corrected
+- Newton calibration avoids mutating JAX arrays during numerical updates
+- Console logging correctly detects existing console handlers without confusing them with file handlers
+- CI now installs the optional dataframe dependencies required by the complete plotting test suite
 
 ## [0.3.0] - 2026-04-16
 
@@ -148,7 +176,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Comprehensive test suite
 - Documentation and examples
 
-[Unreleased]: https://github.com/dgreenwald/equilibrium/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/dgreenwald/equilibrium/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/dgreenwald/equilibrium/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/dgreenwald/equilibrium/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/dgreenwald/equilibrium/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/dgreenwald/equilibrium/compare/v0.0.2...v0.1.0
 [0.0.2]: https://github.com/dgreenwald/equilibrium/compare/v0.0.1...v0.0.2

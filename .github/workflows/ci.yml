@@ -32,7 +32,7 @@ jobs:
         run: python -m pip install --upgrade "hatchling>=1.24" build
 
       - name: Install Equilibrium + dev extras  (editable)
-        run: python -m pip install -e .[dev]
+        run: python -m pip install -e ".[dev,dataframe]"
 
       - name: Run Ruff (lint + import order)
         run: ruff check --output-format=github .
