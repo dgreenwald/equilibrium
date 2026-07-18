@@ -1,0 +1,43 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""Specification file to define the model"""
+
+from equilibrium import Model
+# import equilibrium.blocks as ebl
+
+# import blocks as bl
+from parameters import get_params, get_steady_guess
+
+def create_model(
+    flags: dict | None = None,
+    params: dict | None = None,
+    steady_guess: dict | None = None,
+    label: str = "test",
+    **kwargs,
+) -> Model:
+    
+    # Merge with defaults
+    default_flags = {
+        # Flags here
+        }
+    
+    flags = {**default_flags, **(flags or {})}    
+    
+    mod = Model(
+        flags=flags,
+        params=params,
+        steady_guess=steady_guess,
+        label=label,
+        **kwargs,
+    )
+    
+    mod.params.update(get_params(mod.flags))
+    mod.steady_guess.update(get_steady_guess(mod.flags, mod.params))
+    
+    ######################################################################
+    # FINISH UP
+    ######################################################################
+
+    mod.finalize()
+
+    return mod

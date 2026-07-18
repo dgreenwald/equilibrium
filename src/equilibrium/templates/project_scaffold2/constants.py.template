@@ -1,0 +1,30 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""Defines project-wide constants and settings."""
+
+# import os
+# from pathlib import Path
+# from equilibrium import SeriesTransform
+
+Nt_irf = 20
+
+plot_vars = []
+
+var_titles = {}
+series_transforms = {}
+mod_labels_colors_markers = {}
+
+for model in []:
+    for exper in []:
+        model_exper = f'{model}_{exper}'
+        if model_exper not in mod_labels_colors_markers:
+            mod_labels_colors_markers[model_exper] = mod_labels_colors_markers[model]
+
+labels = {}
+colors = {}
+styles = {}
+markers = {}
+
+for key, this_data in mod_labels_colors_markers.items():
+
+    labels[key], colors[key], markers[key] = this_data

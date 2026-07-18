@@ -1,0 +1,164 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""Main script to run the code"""
+
+import argparse
+# from dataclasses import dataclass, field
+
+# import numpy as np
+
+from equilibrium.solvers import deterministic, linear
+from equilibrium import RunItem
+
+import constants as K
+
+from specifications import (
+    build_fit_deterministic_calibration,
+    configure_model,
+    configure_experiment,
+)
+from model import create_model
+
+
+# @dataclass
+# class RunItem:
+#     mod_spec: str | list
+#     experiments: list = field(default_factory=list)
+
+# =============================================================================
+# Select Configuration (change this line to switch configurations)
+# =============================================================================
+
+# DEFAULT_RUN_TYPE = 'fit_deterministic'
+DEFAULT_RUN_TYPE = 'steady'
+# DEFAULT_RUN_TYPE = 'irfs'
+# DEFAULT_RUN_TYPE = 'deterministic'
+
+# =============================================================================
+# Configuration Profiles
+# =============================================================================
+
+CONFIGS = {
+    'fit_deterministic': {
+        'runs': [
+            RunItem('baseline', []),
+        ],
+        'tasks': ['fit_deterministic'],
+    },
+
+    'deterministic': {
+        'runs': [
+            RunItem('baseline', []),
+            ],
+        'tasks': [
+            'steady',
+            # 'save_experiments',
+            'deterministic'
+            ],
+    },
+
+    'steady': {
+        'runs': [
+            RunItem(['baseline']),
+        ],
+        'tasks': ['steady'],
+    },
+
+    'irfs': {
+        'runs': [
+            RunItem(['baseline']),
+        ],
+        'tasks': ['steady', 'irfs'],
+    },
+}
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Run model configurations.")
+    parser.add_argument(
+        "--run-type",
+        choices=sorted(CONFIGS),
+        default=DEFAULT_RUN_TYPE,
+        help="Configuration profile to execute.",
+    )
+    return parser.parse_args()
+
+
+def main(run_type):
+    config = CONFIGS[run_type]
+    run_list = config['tasks']
+
+    # save_params_to_tex = True
+    base_flags = {'freddie_experiment' : False}
+
+    for run in config['runs']:
+
+        base_mod_spec = run.mod_spec
+        base_expers = run.experiments
+
+        flags, params, mod_spec = configure_model(base_mod_spec, flags=base_flags.copy())
+
+        mod = create_model(flags, params=params, label=mod_spec.label)
+
+        if 'steady' in run_list:
+
+            mod.solve_steady(calibrate=True, save=True, load_initial_guess=True,
+                             verbose_iterations=True, save_tex=True)
+
+        if 'irfs' in run_list:
+
+            mod.linearize()
+            mod.compute_linear_irfs(K.Nt_irf)
+            # mod.plot_linear_irfs(include_list=K.plot_vars, plot_type='pdf',
+            #                      max_per_page=12, n_per_row=3)
+
+        if 'save_experiments' in run_list:
+
+            for base_exper in base_expers:
+
+                _ = configure_experiment(base_exper, save_params_to_tex=True)
+
+        if any(task in run_list for task in ('deterministic', 'linear_sequence', 'fit_deterministic')):
+
+            for base_exper in base_expers:
+
+                det_spec, exper = configure_experiment(base_exper, save_params_to_tex=True)
+
+                Nt = 60
+                det_spec.Nt = Nt
+                
+                if 'linear_sequence' in run_list:
+                    res = linear.solve_sequence_linear(det_spec, mod, Nt)
+                    
+                if 'deterministic' in run_list:
+                    res = deterministic.solve_sequence(det_spec, mod, Nt, save_regime_steady=True)
+                    
+                if 'fit_deterministic' in run_list:
+
+                    from equilibrium import calibrate
+                    from py_tools.in_out import read_json
+                    
+                    max_changes = read_json(K.CALIBRATION_TARGET_DIR / 'max_boom_changes.json')
+
+                    targets, calib_params = build_fit_deterministic_calibration(
+                        mod_spec.label,
+                        exper,
+                        max_changes,
+                    )
+                    
+                    cal_label = exper.label
+                    res = calibrate(
+                        mod,
+                        targets,
+                        calib_params,
+                        solver='deterministic',
+                        spec=det_spec,
+                        series_transforms=K.series_transforms,
+                        label=cal_label,
+                    )
+                    print(res)
+
+
+if __name__ == "__main__":
+    args = parse_args()
+    main(args.run_type)
