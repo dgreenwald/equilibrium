@@ -1,11 +1,14 @@
 """Tests for quadrature and exogenous-process data containers."""
 
 import math
+from types import SimpleNamespace
 
 import jax
+import jax.numpy as jnp
 import numpy as np
 import pytest
 
+from equilibrium.model import Model
 from equilibrium.solvers.quadrature import (
     ExogenousProcess,
     JaxExogenousProcess,
@@ -13,7 +16,9 @@ from equilibrium.solvers.quadrature import (
     QuadratureRule,
     _merge_nodes,
     deterministic_quadrature,
+    exogenous_process_from_model,
     gauss_hermite_normal,
+    next_exogenous_states_jax,
     smolyak_gauss_hermite,
     tensor_gauss_hermite,
 )
@@ -635,3 +640,290 @@ def test_smolyak_rejects_invalid_tolerances(name, value) -> None:
 def test_smolyak_rejects_invalid_max_nodes(max_nodes) -> None:
     with pytest.raises(ValueError, match="max_nodes"):
         smolyak_gauss_hermite(2, 1, max_nodes=max_nodes)
+
+
+def test_exogenous_process_resolves_model_parameters_in_exog_order() -> None:
+    model = Model(
+        exog_list=["technology", "preference"],
+        params={
+            "PERS_preference": 0.7,
+            "VOL_preference": 0.04,
+            "PERS_technology": 0.95,
+            "VOL_technology": 0.01,
+        },
+    )
+    original_params = model.params.copy()
+    original_exog = model.exog_list.copy()
+
+    process = exogenous_process_from_model(model)
+
+    assert process.names == ("technology", "preference")
+    np.testing.assert_array_equal(process.persistence, np.diag([0.95, 0.7]))
+    np.testing.assert_array_equal(process.innovation_impact, np.diag([0.01, 0.04]))
+    assert model.params == original_params
+    assert model.exog_list == original_exog
+
+
+def test_exogenous_process_accepts_full_and_rectangular_overrides() -> None:
+    persistence = np.array([[0.8, 0.1], [-0.2, 0.6]])
+    impact = np.array([[0.3], [0.4]])
+
+    class ExplicitModel:
+        exog_list = ["a", "b"]
+
+        @property
+        def params(self):
+            raise AssertionError("params should not be read with complete overrides")
+
+        @property
+        def linear_mod(self):
+            raise AssertionError("linear_mod must never be read")
+
+    process = exogenous_process_from_model(
+        ExplicitModel(),
+        persistence=persistence,
+        innovation_impact=impact,
+    )
+
+    np.testing.assert_array_equal(process.persistence, persistence)
+    np.testing.assert_array_equal(process.innovation_impact, impact)
+
+
+def test_exogenous_process_partial_override_reads_only_needed_defaults() -> None:
+    model = SimpleNamespace(
+        exog_list=["a", "b"],
+        params={"VOL_a": 0.1, "VOL_b": 0.2},
+    )
+    persistence = np.array([[0.8, 0.1], [0.0, 0.7]])
+
+    process = exogenous_process_from_model(model, persistence=persistence)
+
+    np.testing.assert_array_equal(process.persistence, persistence)
+    np.testing.assert_array_equal(process.innovation_impact, np.diag([0.1, 0.2]))
+
+
+def test_exogenous_process_does_not_read_linear_model() -> None:
+    class ModelWithoutReadableLinearization:
+        exog_list = ["a"]
+        params = {"PERS_a": 0.9, "VOL_a": 0.2}
+
+        @property
+        def linear_mod(self):
+            raise AssertionError("linear_mod must never be read")
+
+    process = exogenous_process_from_model(ModelWithoutReadableLinearization())
+
+    np.testing.assert_array_equal(process.innovation_impact, [[0.2]])
+
+
+@pytest.mark.parametrize(
+    ("model", "message"),
+    [
+        (SimpleNamespace(params={}), "exog_list"),
+        (SimpleNamespace(exog_list=["a"]), "provide params"),
+        (
+            SimpleNamespace(exog_list=["a"], params={"VOL_a": 0.1}),
+            "PERS_a",
+        ),
+        (
+            SimpleNamespace(exog_list=["a"], params={"PERS_a": 0.9}),
+            "VOL_a",
+        ),
+        (
+            SimpleNamespace(
+                exog_list=["a", "a"],
+                params={"PERS_a": 0.9, "VOL_a": 0.1},
+            ),
+            "unique",
+        ),
+        (
+            SimpleNamespace(exog_list=["a"], params={"PERS_a": np.nan, "VOL_a": 0.1}),
+            "finite",
+        ),
+    ],
+)
+def test_exogenous_process_rejects_invalid_model_data(model, message) -> None:
+    with pytest.raises(ValueError, match=message):
+        exogenous_process_from_model(model)
+
+
+@pytest.mark.parametrize(
+    ("persistence", "impact", "message"),
+    [
+        (np.eye(3), np.eye(2), "persistence"),
+        (np.eye(2), np.ones(2), "innovation_impact"),
+        (np.eye(2), np.ones((3, 1)), "innovation_impact"),
+        (np.array([[np.inf, 0.0], [0.0, 1.0]]), np.eye(2), "finite"),
+        (np.eye(2), np.array([[0.1], [np.nan]]), "finite"),
+    ],
+)
+def test_exogenous_process_rejects_invalid_overrides(
+    persistence, impact, message
+) -> None:
+    model = SimpleNamespace(exog_list=["a", "b"])
+    with pytest.raises(ValueError, match=message):
+        exogenous_process_from_model(
+            model, persistence=persistence, innovation_impact=impact
+        )
+
+
+def test_exogenous_process_supports_zero_exogenous_variables() -> None:
+    process = exogenous_process_from_model(SimpleNamespace(exog_list=[], params={}))
+
+    assert process.names == ()
+    assert process.persistence.shape == (0, 0)
+    assert process.innovation_impact.shape == (0, 0)
+
+
+def test_next_exogenous_states_single_and_batched_shapes() -> None:
+    process = ExogenousProcess(
+        ("a", "b"),
+        np.array([[0.8, 0.1], [-0.2, 0.6]]),
+        np.array([[0.3], [0.4]]),
+    ).as_jax()
+    nodes = jnp.array([[-1.0], [0.0], [1.0]])
+    current = jnp.array([2.0, -1.0])
+    batch = jnp.array([[2.0, -1.0], [0.5, 3.0]])
+
+    single_result = next_exogenous_states_jax(process, current, nodes)
+    batch_result = next_exogenous_states_jax(process, batch, nodes)
+    expected_single = np.array([[1.2, -1.4], [1.5, -1.0], [1.8, -0.6]])
+
+    assert single_result.shape == (3, 2)
+    assert batch_result.shape == (2, 3, 2)
+    np.testing.assert_allclose(single_result, expected_single)
+    np.testing.assert_allclose(batch_result[0], expected_single)
+
+
+def test_next_exogenous_states_eager_jit_and_vmap_parity() -> None:
+    process = ExogenousProcess(
+        ("a", "b"),
+        np.array([[0.9, 0.2], [0.0, 0.7]]),
+        np.array([[0.1, -0.2], [0.3, 0.4]]),
+    ).as_jax()
+    nodes = jnp.array([[-1.0, 0.5], [0.0, 0.0], [1.0, -0.5]])
+    batch = jnp.array([[1.0, 2.0], [-0.5, 0.25], [3.0, -2.0]])
+
+    eager = next_exogenous_states_jax(process, batch, nodes)
+    jitted = jax.jit(next_exogenous_states_jax)(process, batch, nodes)
+    mapped = jax.vmap(lambda state: next_exogenous_states_jax(process, state, nodes))(
+        batch
+    )
+
+    np.testing.assert_allclose(jitted, eager)
+    np.testing.assert_allclose(mapped, eager)
+    assert eager.dtype == np.float64
+
+
+def test_next_exogenous_states_matches_conditional_moments_without_double_scaling() -> (
+    None
+):
+    persistence = np.array([[0.85, 0.1], [-0.05, 0.7]])
+    impact = np.array([[0.2, 0.0], [0.1, 0.3]])
+    process = ExogenousProcess(("a", "b"), persistence, impact).as_jax()
+    rule = tensor_gauss_hermite(3, dimension=2)
+    current = jnp.array([1.2, -0.4])
+
+    next_states = next_exogenous_states_jax(process, current, rule.as_jax().nodes)
+    conditional_mean = rule.integrate(np.asarray(next_states))
+    deviations = np.asarray(next_states) - conditional_mean
+    covariance = np.einsum("n,ni,nj->ij", rule.weights, deviations, deviations)
+
+    np.testing.assert_allclose(conditional_mean, persistence @ current, atol=2e-14)
+    np.testing.assert_allclose(covariance, impact @ impact.T, atol=2e-14)
+
+
+def test_model_volatility_is_applied_exactly_once() -> None:
+    model = SimpleNamespace(
+        exog_list=["a", "b"],
+        params={"PERS_a": 0.9, "PERS_b": 0.8, "VOL_a": 0.2, "VOL_b": 0.5},
+    )
+    process = exogenous_process_from_model(model).as_jax()
+    rule = tensor_gauss_hermite(3, dimension=2)
+    states = next_exogenous_states_jax(process, jnp.zeros(2), rule.as_jax().nodes)
+    covariance = np.einsum("n,ni,nj->ij", rule.weights, states, states)
+
+    np.testing.assert_allclose(covariance, np.diag([0.2**2, 0.5**2]), atol=2e-14)
+
+
+def test_next_exogenous_states_gradients() -> None:
+    persistence = jnp.array([[0.8, 0.1], [-0.2, 0.6]])
+    impact = jnp.array([[0.3, -0.1], [0.2, 0.4]])
+    current = jnp.array([1.5, -0.5])
+    nodes = jnp.array([[-1.0, 0.5], [0.25, -0.75], [1.0, 0.0]])
+    cotangent = jnp.array([[1.0, -2.0], [0.5, 0.25], [-1.5, 3.0]])
+
+    def loss(phi, innovation_matrix, state):
+        process = JaxExogenousProcess(phi, innovation_matrix)
+        next_states = next_exogenous_states_jax(process, state, nodes)
+        return jnp.sum(cotangent * next_states)
+
+    phi_gradient, impact_gradient, state_gradient = jax.grad(loss, argnums=(0, 1, 2))(
+        persistence, impact, current
+    )
+    expected_phi_gradient = np.einsum("ne,j->ej", cotangent, current)
+    expected_impact_gradient = np.einsum("ne,nk->ek", cotangent, nodes)
+    expected_state_gradient = np.einsum("ne,ej->j", cotangent, persistence)
+
+    np.testing.assert_allclose(phi_gradient, expected_phi_gradient)
+    np.testing.assert_allclose(impact_gradient, expected_impact_gradient)
+    np.testing.assert_allclose(state_gradient, expected_state_gradient)
+
+
+def test_next_exogenous_states_zero_dimensional_contract() -> None:
+    process = ExogenousProcess((), np.empty((0, 0)), np.empty((0, 0))).as_jax()
+    nodes = deterministic_quadrature().as_jax().nodes
+
+    single = next_exogenous_states_jax(process, jnp.empty(0), nodes)
+    batched = next_exogenous_states_jax(process, jnp.empty((4, 0)), nodes)
+
+    assert single.shape == (1, 0)
+    assert batched.shape == (4, 1, 0)
+
+
+@pytest.mark.parametrize(
+    ("process", "current", "nodes", "message"),
+    [
+        (
+            JaxExogenousProcess(jnp.ones(2), jnp.eye(2)),
+            jnp.ones(2),
+            jnp.ones((1, 2)),
+            "square matrix",
+        ),
+        (
+            JaxExogenousProcess(jnp.eye(2), jnp.ones(2)),
+            jnp.ones(2),
+            jnp.ones((1, 1)),
+            "innovation_impact",
+        ),
+        (
+            JaxExogenousProcess(jnp.eye(2), jnp.ones((2, 1))),
+            jnp.ones(2),
+            jnp.ones(1),
+            "two-dimensional",
+        ),
+        (
+            JaxExogenousProcess(jnp.eye(2), jnp.ones((2, 1))),
+            jnp.ones(2),
+            jnp.ones((1, 2)),
+            "matching innovation dimensions",
+        ),
+        (
+            JaxExogenousProcess(jnp.eye(2), jnp.ones((2, 1))),
+            jnp.ones((1, 1, 2)),
+            jnp.ones((1, 1)),
+            "one- or two-dimensional",
+        ),
+        (
+            JaxExogenousProcess(jnp.eye(2), jnp.ones((2, 1))),
+            jnp.ones(3),
+            jnp.ones((1, 1)),
+            "n_exogenous columns",
+        ),
+    ],
+)
+def test_next_exogenous_states_rejects_invalid_shapes(
+    process, current, nodes, message
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        next_exogenous_states_jax(process, current, nodes)

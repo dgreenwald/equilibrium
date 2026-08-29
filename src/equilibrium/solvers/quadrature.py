@@ -175,6 +175,100 @@ class ExogenousProcess:
         )
 
 
+def exogenous_process_from_model(
+    model,
+    *,
+    persistence: np.ndarray | None = None,
+    innovation_impact: np.ndarray | None = None,
+) -> ExogenousProcess:
+    """Resolve exogenous-process matrices without linearizing ``model``.
+
+    Exogenous names retain ``model.exog_list`` order.  Unless explicitly
+    overridden, persistence is ``diag(PERS_<name>)`` and innovation impact is
+    ``diag(VOL_<name>)``.  The resolver deliberately does not inspect or
+    compose ``model.linear_mod.impact_matrix``; callers wanting an alternative
+    impact convention must pass it as ``innovation_impact``.
+    """
+
+    try:
+        names = tuple(model.exog_list)
+    except (AttributeError, TypeError) as error:
+        raise ValueError("model must provide an iterable exog_list") from error
+    if len(set(names)) != len(names):
+        raise ValueError("exogenous names must be unique")
+
+    params = None
+    if persistence is None or innovation_impact is None:
+        try:
+            params = model.params
+        except AttributeError as error:
+            raise ValueError(
+                "model must provide params for default process data"
+            ) from error
+
+    if persistence is None:
+        persistence_values = _model_process_parameters(params, names, "PERS")
+        resolved_persistence = np.diag(persistence_values)
+    else:
+        resolved_persistence = persistence
+
+    if innovation_impact is None:
+        volatility_values = _model_process_parameters(params, names, "VOL")
+        resolved_innovation_impact = np.diag(volatility_values)
+    else:
+        resolved_innovation_impact = innovation_impact
+
+    return ExogenousProcess(
+        names=names,
+        persistence=resolved_persistence,
+        innovation_impact=resolved_innovation_impact,
+    )
+
+
+def next_exogenous_states_jax(
+    process: JaxExogenousProcess,
+    current_z: jax.Array,
+    innovation_nodes: jax.Array,
+) -> jax.Array:
+    """Apply one conditional exogenous transition for every innovation node.
+
+    A current state shaped ``(n_exogenous,)`` returns
+    ``(n_nodes, n_exogenous)``.  A batch shaped
+    ``(n_batch, n_exogenous)`` returns
+    ``(n_batch, n_nodes, n_exogenous)``.
+    """
+
+    persistence = jnp.asarray(process.persistence)
+    innovation_impact = jnp.asarray(process.innovation_impact)
+    current_z = jnp.asarray(current_z)
+    innovation_nodes = jnp.asarray(innovation_nodes)
+
+    if persistence.ndim != 2 or persistence.shape[0] != persistence.shape[1]:
+        raise ValueError("persistence must be a square matrix")
+    n_exogenous = persistence.shape[0]
+    if innovation_impact.ndim != 2 or innovation_impact.shape[0] != n_exogenous:
+        raise ValueError(
+            "innovation_impact must have shape (n_exogenous, n_innovations)"
+        )
+    if innovation_nodes.ndim != 2:
+        raise ValueError("innovation_nodes must be a two-dimensional array")
+    if innovation_nodes.shape[1] != innovation_impact.shape[1]:
+        raise ValueError(
+            "innovation_nodes and innovation_impact must have matching "
+            "innovation dimensions"
+        )
+    if current_z.ndim not in (1, 2):
+        raise ValueError("current_z must be one- or two-dimensional")
+    if current_z.shape[-1] != n_exogenous:
+        raise ValueError("current_z must have n_exogenous columns")
+
+    conditional_mean = current_z @ persistence.T
+    innovations = innovation_nodes @ innovation_impact.T
+    if current_z.ndim == 1:
+        return conditional_mean[jnp.newaxis, :] + innovations
+    return conditional_mean[:, jnp.newaxis, :] + innovations[jnp.newaxis, :, :]
+
+
 def deterministic_quadrature() -> QuadratureRule:
     """Return the one-node, zero-dimensional deterministic rule."""
 
@@ -432,6 +526,24 @@ def _merge_nodes(
             merged_weights[match] += float(weight)
 
     return np.stack(merged_nodes), np.asarray(merged_weights)
+
+
+def _model_process_parameters(
+    params, names: tuple[str, ...], prefix: str
+) -> np.ndarray:
+    values = []
+    for name in names:
+        parameter_name = f"{prefix}_{name}"
+        try:
+            values.append(params[parameter_name])
+        except (KeyError, TypeError) as error:
+            raise ValueError(
+                f"model is missing required parameter {parameter_name!r}"
+            ) from error
+    try:
+        return np.asarray(values, dtype=float)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"model {prefix}_* parameters must be numeric") from error
 
 
 def _normalize_sparse_dimension(dimension: int) -> int:
