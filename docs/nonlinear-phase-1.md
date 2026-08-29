@@ -386,6 +386,13 @@ not rely on randomized test inputs unless they are seeded.
 Exit criterion: every required JAX transformation succeeds, and NumPy/JAX
 values agree to the selected tolerance.
 
+Status: **complete on 2026-08-28**. The JAX matrix now covers one through three
+dimensions, tensor-product and Smolyak schemes, single and batched points,
+scalar and vector outputs, asymmetric domains, JIT, `vmap`, point and
+coefficient derivatives, explicit-coefficient immutability, float64 behavior,
+and rejection of hat and mixed-basis schemes. All 19 JAX-specific tests and all
+168 approximation tests pass.
+
 ### Work package 6: Documentation and integration cleanup
 
 1. Add a short approximation section to the project README or a focused
