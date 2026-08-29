@@ -161,11 +161,24 @@ Use time iteration to get close, then switch to Newton for final refinement. Thi
 
 ### Quadrature for expectations
 
-The existing `Model.exog_list` encodes AR(1) shock processes with persistence and volatility parameters. The collocation solver needs Gauss-Hermite quadrature nodes and weights to integrate over next-period shock innovations $\epsilon \sim N(0, I)$.
+The existing `Model.exog_list` identifies the exogenous AR(1) processes. The collocation solver needs Gauss-Hermite quadrature nodes and weights to integrate over next-period shock innovations $\epsilon \sim N(0, I)$. Shock scaling must have a single authoritative source (for example, an innovation impact matrix); the quadrature routine must not apply volatility a second time.
 
-Implementation:
-- Use `numpy.polynomial.hermite_e.hermegauss(n_quad)` for probabilist's Hermite quadrature.
-- For multiple shocks, use a Smolyak sparse quadrature rule (the same `funcapprox` index machinery can construct this) to avoid the curse of dimensionality.
+The one-dimensional rule should follow the established `ghquad_norm()` convention in `~/numerical/py_tools/numerical/core.py`:
+
+```python
+x, w = np.polynomial.hermite.hermgauss(n_quad)
+w = w / np.sum(w)
+x = mu + np.sqrt(2.0) * sig * x
+```
+
+`numpy.polynomial.hermite.hermgauss()` integrates against $e^{-x^2}$. Multiplying its nodes by $\sqrt{2}\,\sigma$, shifting by $\mu$, and normalizing its weights to sum to one yields nodes and probability weights for $N(\mu, \sigma^2)$. Thus the standard-normal rule uses `mu=0.0` and `sig=1.0`, and directly approximates
+
+$$
+\mathbb{E}[h(\epsilon)] \approx \sum_k w_k h(x_k),
+\qquad \sum_k w_k = 1.
+$$
+
+For independent shocks, a tensor-product rule uses Cartesian products of the one-dimensional nodes and products of their normalized weights, which therefore also sum to one. For larger shock dimensions, add a separately validated Smolyak quadrature construction; sparse-grid interpolation indices alone do not define the necessary quadrature weights.
 
 ### Proposed API
 
@@ -277,8 +290,9 @@ class CollocationResult:
 ### Phase 2: Quadrature infrastructure
 
 1. Add `src/equilibrium/solvers/quadrature.py` with:
-   - Gauss-Hermite nodes/weights generator.
-   - Sparse quadrature rule for multi-shock models (using the same Smolyak index logic).
+   - A normalized Gauss-Hermite nodes/weights generator matching `ghquad_norm()` (`hermgauss`, weights summing to one, nodes scaled by `sqrt(2) * sig` and shifted by `mu`).
+   - Tensor-product rules for a small number of independent shocks.
+   - A separately validated sparse quadrature rule for higher-dimensional shock models.
    - Utility to compute next-period exogenous states given quadrature nodes.
 
 ### Phase 3: Collocation solver core
@@ -307,7 +321,8 @@ class CollocationResult:
    - Linear perturbation solution (should match in the small-shock limit).
    - Deterministic path solver (should match for zero-volatility paths).
 2. Convergence tests: verify Newton convergence rate.
-3. Accuracy tests: Euler errors on random test grid should be < 1e-4 for standard calibrations.
+3. Quadrature tests: verify that weights sum to one and that the rule reproduces the requested normal mean and variance, following the existing `ghquad_norm()` tests.
+4. Accuracy tests: Euler errors on random test grid should be < 1e-4 for standard calibrations.
 
 ---
 
