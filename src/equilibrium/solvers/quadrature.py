@@ -8,9 +8,10 @@ through JAX transformations without making static metadata part of a trace.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from numbers import Integral, Real
-from typing import NamedTuple
+from typing import NamedTuple, Sequence
 
 import jax
 import jax.numpy as jnp
@@ -217,6 +218,141 @@ def gauss_hermite_normal(
         kind="tensor",
         orders=(degree,),
     )
+
+
+def tensor_gauss_hermite(
+    degrees: int | Sequence[int],
+    *,
+    dimension: int | None = None,
+    mu: float | Sequence[float] = 0.0,
+    sigma: float | Sequence[float] = 1.0,
+    max_nodes: int | None = 100_000,
+) -> QuadratureRule:
+    """Construct a tensor-product rule for independent normal variables.
+
+    A scalar degree is used in every dimension and defaults to one dimension
+    when ``dimension`` is omitted.  A degree sequence determines the dimension
+    when ``dimension`` is omitted.  Nodes are ordered as if produced by
+    ``numpy.meshgrid(..., indexing="ij")`` and flattened in C order.
+
+    Parameters
+    ----------
+    max_nodes
+        Optional setup-time allocation guard.  The default rejects rules with
+        more than 100,000 nodes; pass ``None`` to disable the guard.
+    """
+
+    normalized_dimension = _normalize_dimension(dimension)
+    normalized_degrees, normalized_dimension = _normalize_degrees(
+        degrees, normalized_dimension
+    )
+    means = _normalize_distribution_parameter(mu, normalized_dimension, "mu")
+    standard_deviations = _normalize_distribution_parameter(
+        sigma, normalized_dimension, "sigma"
+    )
+    if any(value <= 0.0 for value in standard_deviations):
+        raise ValueError("sigma values must be strictly positive")
+    normalized_max_nodes = _normalize_max_nodes(max_nodes)
+
+    if normalized_dimension == 0:
+        return deterministic_quadrature()
+
+    n_nodes = math.prod(normalized_degrees)
+    if normalized_max_nodes is not None and n_nodes > normalized_max_nodes:
+        raise ValueError(
+            f"tensor rule requires {n_nodes} nodes, exceeding max_nodes="
+            f"{normalized_max_nodes}"
+        )
+
+    one_dimensional_rules = [
+        gauss_hermite_normal(degree, mu=mean, sigma=standard_deviation)
+        for degree, mean, standard_deviation in zip(
+            normalized_degrees, means, standard_deviations
+        )
+    ]
+    node_meshes = np.meshgrid(
+        *(rule.nodes[:, 0] for rule in one_dimensional_rules), indexing="ij"
+    )
+    weight_meshes = np.meshgrid(
+        *(rule.weights for rule in one_dimensional_rules), indexing="ij"
+    )
+    nodes = np.stack([mesh.reshape(-1) for mesh in node_meshes], axis=1)
+    weights = np.prod(np.stack(weight_meshes, axis=0), axis=0).reshape(-1)
+
+    return QuadratureRule(
+        nodes=nodes,
+        weights=weights,
+        kind="tensor",
+        orders=normalized_degrees,
+    )
+
+
+def _normalize_dimension(dimension: int | None) -> int | None:
+    if dimension is None:
+        return None
+    if (
+        not isinstance(dimension, Integral)
+        or isinstance(dimension, bool)
+        or dimension < 0
+    ):
+        raise ValueError("dimension must be a nonnegative integer")
+    return int(dimension)
+
+
+def _normalize_degrees(
+    degrees: int | Sequence[int], dimension: int | None
+) -> tuple[tuple[int, ...], int]:
+    if isinstance(degrees, Integral) and not isinstance(degrees, bool):
+        if degrees < 1:
+            raise ValueError("degrees must contain positive integers")
+        resolved_dimension = 1 if dimension is None else dimension
+        return (int(degrees),) * resolved_dimension, resolved_dimension
+    if isinstance(degrees, (str, bytes)):
+        raise ValueError("degrees must be an integer or a sequence of integers")
+    try:
+        degree_values = tuple(degrees)
+    except TypeError as error:
+        raise ValueError(
+            "degrees must be an integer or a sequence of integers"
+        ) from error
+    if any(
+        not isinstance(value, Integral) or isinstance(value, bool) or value < 1
+        for value in degree_values
+    ):
+        raise ValueError("degrees must contain positive integers")
+    resolved_dimension = len(degree_values) if dimension is None else dimension
+    if len(degree_values) != resolved_dimension:
+        raise ValueError("degrees must have one entry per dimension")
+    return tuple(int(value) for value in degree_values), resolved_dimension
+
+
+def _normalize_distribution_parameter(
+    values: float | Sequence[float], dimension: int, name: str
+) -> tuple[float, ...]:
+    if isinstance(values, Real) and not isinstance(values, bool):
+        value = _finite_scalar(values, name)
+        return (value,) * dimension
+    if isinstance(values, (str, bytes)):
+        raise ValueError(f"{name} must be a scalar or a sequence of scalars")
+    try:
+        parameter_values = tuple(values)
+    except TypeError as error:
+        raise ValueError(f"{name} must be a scalar or a sequence of scalars") from error
+    if len(parameter_values) != dimension:
+        raise ValueError(f"{name} must have one entry per dimension")
+    return tuple(_finite_scalar(value, name) for value in parameter_values)
+
+
+def _normalize_max_nodes(max_nodes: int | None) -> int | None:
+    if max_nodes is None:
+        return None
+    if (
+        not isinstance(max_nodes, Integral)
+        or isinstance(max_nodes, bool)
+        or max_nodes < 1
+    ):
+        raise ValueError("max_nodes must be a positive integer or None")
+    return int(max_nodes)
 
 
 def _finite_scalar(value: object, name: str) -> float:

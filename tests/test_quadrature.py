@@ -13,6 +13,7 @@ from equilibrium.solvers.quadrature import (
     QuadratureRule,
     deterministic_quadrature,
     gauss_hermite_normal,
+    tensor_gauss_hermite,
 )
 
 jax.config.update("jax_enable_x64", True)
@@ -265,3 +266,147 @@ def test_gauss_hermite_rejects_invalid_mean(mu) -> None:
 def test_gauss_hermite_rejects_invalid_sigma(sigma) -> None:
     with pytest.raises(ValueError, match="sigma"):
         gauss_hermite_normal(3, sigma=sigma)
+
+
+@pytest.mark.parametrize("dimension", range(5))
+def test_tensor_rule_dimensions_and_node_counts(dimension: int) -> None:
+    rule = tensor_gauss_hermite(2, dimension=dimension)
+
+    expected_nodes = 1 if dimension == 0 else 2**dimension
+    assert rule.dimension == dimension
+    assert rule.n_nodes == expected_nodes
+    assert rule.nodes.shape == (expected_nodes, dimension)
+    assert rule.weights.shape == (expected_nodes,)
+    assert rule.weights.sum() == pytest.approx(1.0)
+    if dimension == 0:
+        assert rule.kind == "deterministic"
+        assert rule.orders == ()
+    else:
+        assert rule.kind == "tensor"
+        assert rule.orders == (2,) * dimension
+
+
+def test_tensor_rule_infers_dimensions() -> None:
+    assert tensor_gauss_hermite(3).orders == (3,)
+    assert tensor_gauss_hermite([2, 3, 4]).orders == (2, 3, 4)
+    assert tensor_gauss_hermite([]).nodes.shape == (1, 0)
+
+
+def test_tensor_rule_has_documented_cartesian_order() -> None:
+    first = gauss_hermite_normal(2).nodes[:, 0]
+    second = gauss_hermite_normal(3).nodes[:, 0]
+    rule = tensor_gauss_hermite((2, 3))
+
+    expected_nodes = np.array(
+        [
+            [first[0], second[0]],
+            [first[0], second[1]],
+            [first[0], second[2]],
+            [first[1], second[0]],
+            [first[1], second[1]],
+            [first[1], second[2]],
+        ]
+    )
+    expected_weights = np.outer(
+        gauss_hermite_normal(2).weights,
+        gauss_hermite_normal(3).weights,
+    ).reshape(-1)
+    np.testing.assert_array_equal(rule.nodes, expected_nodes)
+    np.testing.assert_array_equal(rule.weights, expected_weights)
+
+
+def test_tensor_rule_nonstandard_marginal_and_cross_moments() -> None:
+    means = np.array([-1.0, 0.5, 2.0])
+    sigmas = np.array([0.4, 1.5, 2.5])
+    rule = tensor_gauss_hermite((3, 4, 5), mu=means, sigma=sigmas)
+
+    for coordinate in range(3):
+        centered = rule.nodes[:, coordinate] - means[coordinate]
+        assert rule.integrate(rule.nodes[:, coordinate]) == pytest.approx(
+            means[coordinate]
+        )
+        assert rule.integrate(centered**2) == pytest.approx(sigmas[coordinate] ** 2)
+
+    centered = rule.nodes - means
+    covariance = np.einsum("n,ni,nj->ij", rule.weights, centered, centered)
+    np.testing.assert_allclose(covariance, np.diag(sigmas**2), atol=2e-14)
+    assert rule.integrate(rule.nodes[:, 0] * rule.nodes[:, 2]) == pytest.approx(
+        means[0] * means[2]
+    )
+
+
+def test_tensor_rule_anisotropic_polynomial_exactness() -> None:
+    rule = tensor_gauss_hermite((2, 3))
+    x = rule.nodes[:, 0]
+    y = rule.nodes[:, 1]
+
+    # The supported degree is three in x and five in y.
+    assert rule.integrate(x**2 * y**4) == pytest.approx(3.0)
+    assert rule.integrate(x**3 * y**5) == pytest.approx(0.0, abs=1e-13)
+
+
+def test_tensor_rule_allocation_guard_runs_before_rule_construction(
+    monkeypatch,
+) -> None:
+    def unexpected_constructor(*args, **kwargs):
+        raise AssertionError("one-dimensional rule was constructed")
+
+    monkeypatch.setattr(
+        "equilibrium.solvers.quadrature.gauss_hermite_normal",
+        unexpected_constructor,
+    )
+    with pytest.raises(ValueError, match="exceeding max_nodes"):
+        tensor_gauss_hermite((100, 100), max_nodes=9_999)
+
+
+def test_tensor_rule_allocation_guard_can_be_disabled() -> None:
+    rule = tensor_gauss_hermite((2, 2), max_nodes=None)
+
+    assert rule.n_nodes == 4
+
+
+@pytest.mark.parametrize(
+    ("degrees", "dimension", "message"),
+    [
+        (0, None, "positive integers"),
+        (-1, None, "positive integers"),
+        (True, None, "integer or a sequence"),
+        (1.5, None, "integer or a sequence"),
+        ((2, 0), None, "positive integers"),
+        ((2, True), None, "positive integers"),
+        ((2, 3), 3, "one entry per dimension"),
+        (2, -1, "nonnegative integer"),
+        (2, 1.5, "nonnegative integer"),
+        (2, True, "nonnegative integer"),
+    ],
+)
+def test_tensor_rule_rejects_invalid_degrees_and_dimension(
+    degrees, dimension, message
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        tensor_gauss_hermite(degrees, dimension=dimension)
+
+
+@pytest.mark.parametrize(
+    ("parameter", "value", "message"),
+    [
+        ("mu", [0.0], "one entry per dimension"),
+        ("mu", [0.0, np.nan], "finite real scalar"),
+        ("mu", "zero", "scalar or a sequence"),
+        ("sigma", [1.0], "one entry per dimension"),
+        ("sigma", [1.0, 0.0], "strictly positive"),
+        ("sigma", [1.0, np.inf], "finite real scalar"),
+    ],
+)
+def test_tensor_rule_rejects_invalid_distribution_parameters(
+    parameter, value, message
+) -> None:
+    kwargs = {parameter: value}
+    with pytest.raises(ValueError, match=message):
+        tensor_gauss_hermite((2, 2), **kwargs)
+
+
+@pytest.mark.parametrize("max_nodes", [0, -1, 1.5, True, "100"])
+def test_tensor_rule_rejects_invalid_max_nodes(max_nodes) -> None:
+    with pytest.raises(ValueError, match="max_nodes"):
+        tensor_gauss_hermite(2, max_nodes=max_nodes)
