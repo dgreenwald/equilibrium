@@ -3,7 +3,7 @@
 Contributors help maintain the high-performance JAX pipeline in Equilibrium; the points below keep changes aligned and reproducible.
 
 ## Project Structure & Module Organization
-- `src/equilibrium/` contains the installable package. `core/` manages rule transforms and code generation; `model/` exposes model, block, derivative, and linearization APIs; `solvers/` hosts calibration, deterministic, Newton, and perturbation routines; `estimation/` contains state-space, likelihood, MCMC, and estimation tools; `io/` and `plot/` handle results export and visualization; `cli/` implements the `equilibrium init` scaffold; and `templates/` and `utils/` provide generated-code templates and shared helpers.
+- `src/equilibrium/` contains the installable package. `approx/` provides NumPy sparse-grid construction plus stateless Chebyshev JAX evaluation; `core/` manages rule transforms and code generation; `model/` exposes model, block, derivative, and linearization APIs; `solvers/` hosts calibration, deterministic, Newton, and perturbation routines; `estimation/` contains state-space, likelihood, MCMC, and estimation tools; `io/` and `plot/` handle results export and visualization; `cli/` implements the `equilibrium init` scaffold; and `templates/` and `utils/` provide generated-code templates and shared helpers.
 - `tests/` holds the pytest suite; reuse fixtures from the RBC examples and keep large artifacts isolated (see `tests/UX_benchmark.npy`).
 - `scripts/relativize_imports.py` is a maintenance helper for path hygiene; touch it only when reorganizing imports.
 
@@ -28,6 +28,7 @@ Contributors help maintain the high-performance JAX pipeline in Equilibrium; the
 - Mirror module names in `tests/test_<module>.py`; seed stochastic routines so JAX tracing stays deterministic.
 - Add regression fixtures under `tests/data/` (create if needed) and document provenance in a README beside the data.
 - Cover new solver paths with both shape and dtype assertions to catch JAX tracing regressions early.
+- Keep approximation setup and fitting NumPy-based; solver hot paths should use `make_jax_data()` and pass coefficients explicitly to `evaluate_jax()`.
 - Always run any new tests you add.
 
 ## Commit & Pull Request Guidelines

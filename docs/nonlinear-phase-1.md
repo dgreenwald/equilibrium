@@ -406,6 +406,19 @@ and rejection of hat and mixed-basis schemes. All 19 JAX-specific tests and all
 Exit criterion: a contributor can discover the package, reproduce its source
 provenance, and understand which portions are JAX-compatible.
 
+Status: **complete on 2026-08-28**. The focused function-approximation guide
+documents NumPy fitting, stateless JAX evaluation, supported shapes, and current
+boundaries. README and contributor guidance reference the new package, the
+nonlinear roadmap reflects the implemented split API, and no external
+`funcapprox` dependency is present. Wheel and source-distribution inspection
+confirmed that `py.typed`, `UPSTREAM.md`, and `jax_eval.py` are shipped. The
+documentation example passed, Ruff passed, and the full repository suite passed
+all 813 tests.
+
+MyPy was not installed in the active environment, so the targeted MyPy command
+could not be executed. This is an environment-level outstanding check rather
+than a known type-check failure.
+
 ## Validation commands
 
 Run targeted checks while developing:

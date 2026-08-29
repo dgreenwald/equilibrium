@@ -18,6 +18,7 @@
 - **Results I/O**: Save and load model results in multiple formats (NPZ, JSON, CSV)
 - **Plotting utilities**: Built-in functions for visualizing IRFs and deterministic paths
 - **Centralized configuration**: Pydantic-based settings with environment variable support
+- **Sparse-grid approximation**: Tensor and Smolyak grids with NumPy fitting and stateless, differentiable JAX evaluation
 
 ## Installation
 
@@ -214,6 +215,15 @@ model.add_block(production_block())
 ```
 
 ## Advanced Usage
+
+### Function Approximation
+
+`equilibrium.approx` provides tensor-product and Smolyak approximation with
+Chebyshev and hat bases. Setup and fitting use NumPy, while an explicit-
+coefficient Chebyshev evaluator supports JAX compilation, batching, and
+automatic differentiation. See the
+[function approximation guide](docs/function-approximation.md) for examples and
+current boundaries.
 
 ### Parameter Calibration
 

@@ -53,6 +53,9 @@ If `funcapprox` is eventually published to PyPI, this decision can be revisited 
 src/equilibrium/
 ├── approx/                    ← NEW: internalized from funcapprox
 │   ├── __init__.py            # Re-export public API
+│   ├── jax_eval.py            # Stateless Chebyshev JAX evaluation
+│   ├── py.typed               # Typed-package marker
+│   ├── UPSTREAM.md            # Source provenance and port history
 │   ├── bases/
 │   │   ├── base.py            # Basis1d ABC
 │   │   ├── chebyshev.py       # ChebyshevBasis1d
@@ -63,7 +66,8 @@ src/equilibrium/
 │   │   └── uniform.py         # UniformGrid1d, UniformGridWithBoundary1d
 │   ├── levels/
 │   │   ├── base.py            # Levels ABC
-│   │   └── smolyak.py         # SmolyakLevels, TensorProductLevels
+│   │   ├── smolyak.py         # Smolyak level families
+│   │   └── tensor.py          # TensorProductLevels
 │   ├── core/
 │   │   ├── index.py           # Index, IndexBlock
 │   │   ├── scheme.py          # Scheme (sparse grid construction)
@@ -82,12 +86,13 @@ The `benchmark` subpackage from `funcapprox` (test functions, plotting utilities
 
 ### JAX adaptation strategy
 
-The port would follow a **dual-backend** pattern:
+The completed Phase 1 port follows a **split setup/evaluation** pattern:
 
 - **Setup-time code** (grid construction, index building, `Scheme.construct()`, basis-inverse precomputation) stays on NumPy. These run once and produce static arrays.
-- **Evaluation-time code** (`Basis1d.evaluate()`, `Scheme.evaluate_bases()`, `Function.evaluate()`, coordinate transforms) would accept and return `jax.numpy` arrays, using `jnp` operations so they are JIT-traceable.
+- **Compatibility evaluation** (`Basis1d.evaluate()`, `Scheme.evaluate_bases()`, and `Function.evaluate()`) remains NumPy-based.
+- **Solver evaluation** uses the stateless `make_jax_data()`, `evaluate_bases_jax()`, and `evaluate_jax()` API. Coefficients are explicit traced arguments, while immutable scheme data is carried by a JAX PyTree.
 
-The simplest implementation: use a module-level import `from jax import numpy as jnp` (already done throughout equilibrium) and convert the evaluation methods. The precomputed `basis_inverse` matrix (NumPy) would be converted to a JAX array once at construction time.
+The JAX path currently supports Chebyshev schemes. Hat bases remain available through the NumPy API and are rejected clearly by the JAX adapter. See [the Phase 1 implementation plan](nonlinear-phase-1.md) and [function approximation guide](function-approximation.md).
 
 ---
 
@@ -196,7 +201,7 @@ mod.solve_steady()
 result = solve_collocation(
     mod,
     # Approximation configuration
-    approx_type="smolyak_chebyshev",  # or pass a funcapprox.Function directly
+    approx_type="smolyak_chebyshev",  # or pass an equilibrium.approx.Function
     max_level=3,                       # Smolyak level
     domain=None,                       # auto from steady state ± 2σ (from linear solution)
 
@@ -279,13 +284,16 @@ class CollocationResult:
 
 ## Implementation Plan
 
-### Phase 1: Port `funcapprox` into `equilibrium.approx`
+### Phase 1: Port `funcapprox` into `equilibrium.approx` (complete)
 
-1. Copy core source files from `funcapprox/src/funcapprox/` into `src/equilibrium/approx/`, excluding `benchmark/` and `py.typed`.
+1. Copy core source files from `funcapprox/src/funcapprox/` into `src/equilibrium/approx/`, excluding `benchmark/` and retaining `py.typed` plus upstream provenance.
 2. Update internal imports (`from funcapprox.` → `from equilibrium.approx.`).
-3. Add JAX-compatible evaluation paths to `Basis1d.evaluate()`, `Scheme.evaluate_bases()`, and `Function.evaluate()`.
+3. Add a stateless, Chebyshev-first JAX evaluation path with explicit coefficients while preserving the NumPy compatibility API.
 4. Re-export the public API from `equilibrium.approx.__init__`.
 5. Port relevant tests from `funcapprox/tests/` into `tests/test_approx*.py`.
+
+Implementation details and validation results are recorded in
+[`docs/nonlinear-phase-1.md`](nonlinear-phase-1.md).
 
 ### Phase 2: Quadrature infrastructure
 
