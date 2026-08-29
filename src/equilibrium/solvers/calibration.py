@@ -759,7 +759,9 @@ def _run_calibration_loop(
             if progress_every and eval_count % progress_every == 0:
                 params_dict = {
                     name: float(val)
-                    for name, val in zip(param_names, np.atleast_1d(params), strict=False)
+                    for name, val in zip(
+                        param_names, np.atleast_1d(params), strict=False
+                    )
                 }
                 residual = np.linalg.norm(errors)
                 if return_weights:

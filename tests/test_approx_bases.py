@@ -364,8 +364,6 @@ class TestModifiedUniformHatBasis1d:
         np.testing.assert_allclose(grads, fd, atol=1e-6, rtol=1e-4)
 
 
-
-
 class TestBasis1dInterface:
     """Tests for the Basis1d interface shared by all implementations."""
 

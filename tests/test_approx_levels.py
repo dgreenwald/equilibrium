@@ -21,7 +21,9 @@ class TestSmolyakLevels:
         np.testing.assert_array_equal(scheme.basis_indices(1), np.array([1, 2]))
         np.testing.assert_array_equal(scheme.basis_indices(2), np.array([3, 4]))
         np.testing.assert_array_equal(scheme.basis_indices(3), np.array([5, 6, 7, 8]))
-        np.testing.assert_array_equal(scheme.basis_indices(4), np.array([9, 10, 11, 12, 13, 14, 15, 16]))
+        np.testing.assert_array_equal(
+            scheme.basis_indices(4), np.array([9, 10, 11, 12, 13, 14, 15, 16])
+        )
 
     def test_grid_indices(self):
         scheme = SmolyakLevels(level=2)

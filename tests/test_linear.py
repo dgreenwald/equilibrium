@@ -249,9 +249,7 @@ class TestSolveSequenceLinear:
         spec = DetSpec(n_regimes=1)
         Nt = 8
 
-        ux_ss = np.concatenate(
-            [mod.steady_components["u"], mod.steady_components["x"]]
-        )
+        ux_ss = np.concatenate([mod.steady_components["u"], mod.steady_components["x"]])
         ux_dev = np.array([0.2, 0.05])
 
         result_levels = linear.solve_sequence_linear(

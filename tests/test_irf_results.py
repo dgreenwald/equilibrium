@@ -255,9 +255,7 @@ class TestPathResult:
         assert np.allclose(same.UX_ss, shared)
 
         regime_2 = DeterministicResult(UX=UX, Z=Z, UX_ss=np.array([1.0, 3.0]))
-        different = SequenceResult(
-            regimes=[regime_0, regime_2], time_list=[1]
-        ).splice()
+        different = SequenceResult(regimes=[regime_0, regime_2], time_list=[1]).splice()
 
         assert different.UX_ss is None
 

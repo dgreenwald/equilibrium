@@ -160,9 +160,7 @@ def _common_steady_array(
         if current is None:
             return None
         current_arr = np.asarray(current)
-        if current_arr.shape != ref_arr.shape or not np.allclose(
-            current_arr, ref_arr
-        ):
+        if current_arr.shape != ref_arr.shape or not np.allclose(current_arr, ref_arr):
             return None
     return ref_arr.copy()
 

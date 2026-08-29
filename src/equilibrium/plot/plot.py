@@ -517,7 +517,9 @@ def plot_paths(
 
     csv_path: Optional[Path] = None
     if save_csv:
-        csv_path = Path(csv_filename) if csv_filename is not None else Path(f"{prefix}.csv")
+        csv_path = (
+            Path(csv_filename) if csv_filename is not None else Path(f"{prefix}.csv")
+        )
         if not csv_path.is_absolute():
             csv_path = plot_dir / csv_path
 
@@ -1408,7 +1410,9 @@ def plot_deterministic_results(
         )
         path_vals[:, :, deviation_var_indices] = selected_vals - baseline
 
-        overlay_idx = len(original_result_names) - 1 if overlay_data is not None else None
+        overlay_idx = (
+            len(original_result_names) - 1 if overlay_data is not None else None
+        )
         if (
             overlay_idx is not None
             and not deviation_apply_to_overlay
@@ -1516,6 +1520,7 @@ def plot_deterministic_results(
             candidate = f"{candidate}_{result_kind}"
         if len(candidate) > 250:
             from ..utils.io import _sha1
+
             subdir_name = f"plots_{_sha1(candidate)}"
             _label_info_to_write = candidate
         else:

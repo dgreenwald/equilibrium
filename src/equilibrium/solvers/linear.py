@@ -246,9 +246,7 @@ def solve_sequence_linear(
             # aligned with deterministic.solve_sequence.
             if ux_init is None:
                 if det_spec.ux_init is not None:
-                    ux_init_levels = _normalize_ux_init(
-                        current_mod, det_spec.ux_init
-                    )
+                    ux_init_levels = _normalize_ux_init(current_mod, det_spec.ux_init)
                     current_x_init = ux_init_levels[N_u:]
                 else:
                     current_x_init = current_mod.steady_components["x"].copy()

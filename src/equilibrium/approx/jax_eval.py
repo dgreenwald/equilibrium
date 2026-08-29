@@ -125,9 +125,7 @@ def _validate_and_batch_points(
     )
 
 
-def _transform_to_canonical(
-    data: JaxApproximationData, points: jax.Array
-) -> jax.Array:
+def _transform_to_canonical(data: JaxApproximationData, points: jax.Array) -> jax.Array:
     user_scale = (data.upper_bounds - data.lower_bounds) / (
         data.canonical_upper - data.canonical_lower
     )
@@ -149,9 +147,7 @@ def _evaluate_chebyshev_1d(x: jax.Array, n_basis: int) -> jax.Array:
     return jax.lax.fori_loop(2, n_basis, recurrence, values)
 
 
-def evaluate_bases_jax(
-    data: JaxApproximationData, points: Any
-) -> jax.Array:
+def evaluate_bases_jax(data: JaxApproximationData, points: Any) -> jax.Array:
     """Evaluate the sparse Chebyshev basis at one point or a batch of points.
 
     Points outside the user domain are evaluated by polynomial extrapolation.

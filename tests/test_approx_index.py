@@ -50,7 +50,11 @@ class TestIndex:
                 )
 
     def test_level_vectors_three_dimensions(self):
-        levels = (SmolyakLevels(level=2), SmolyakLevels(level=2), SmolyakLevels(level=2))
+        levels = (
+            SmolyakLevels(level=2),
+            SmolyakLevels(level=2),
+            SmolyakLevels(level=2),
+        )
         scheme = Index(
             levels=levels,
             max_total_level=2,

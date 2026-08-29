@@ -1099,9 +1099,7 @@ class TestPlotDeterministicResults:
         np.testing.assert_allclose(captured["path_vals"][0, :, 1], [10.0, 20.0, 30.0])
         np.testing.assert_allclose(captured["path_vals"][1, :, 1], [11.0, 22.0, 33.0])
 
-    def test_deviation_overlay_uses_selected_variable_mask(
-        self, tmp_path, monkeypatch
-    ):
+    def test_deviation_overlay_uses_selected_variable_mask(self, tmp_path, monkeypatch):
         """Overlay subtraction follows deviation_include_vars."""
         baseline = DeterministicResult(
             UX=np.array([[1.0, 10.0], [2.0, 20.0], [3.0, 30.0]]),
@@ -1128,7 +1126,10 @@ class TestPlotDeterministicResults:
             include_list=["A", "B"],
             plot_dir=tmp_path,
             result_names=["Baseline", "Model"],
-            overlay_data={"A": np.array([5.0, 6.0, 7.0]), "B": np.array([50.0, 60.0, 70.0])},
+            overlay_data={
+                "A": np.array([5.0, 6.0, 7.0]),
+                "B": np.array([50.0, 60.0, 70.0]),
+            },
             deviation_from="Baseline",
             deviation_include_vars=["A"],
         )
@@ -1165,7 +1166,10 @@ class TestPlotDeterministicResults:
             include_list=["A", "B"],
             plot_dir=tmp_path,
             result_names=["Baseline", "Model"],
-            overlay_data={"A": np.array([5.0, 6.0, 7.0]), "B": np.array([50.0, 60.0, 70.0])},
+            overlay_data={
+                "A": np.array([5.0, 6.0, 7.0]),
+                "B": np.array([50.0, 60.0, 70.0]),
+            },
             deviation_from="Baseline",
             deviation_include_vars=["A"],
             deviation_apply_to_overlay=False,

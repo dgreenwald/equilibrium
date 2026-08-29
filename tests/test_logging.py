@@ -163,8 +163,7 @@ class TestConfigureLogging:
         console_handlers = [
             h
             for h in logger.handlers
-            if type(h) is logging.StreamHandler
-            and h.stream in (sys.stdout, sys.stderr)
+            if type(h) is logging.StreamHandler and h.stream in (sys.stdout, sys.stderr)
         ]
         file_handlers = [
             h for h in logger.handlers if isinstance(h, RotatingFileHandler)

@@ -69,7 +69,7 @@ class TestScheme:
         x1 = np.linspace(-1, 1, 5)
         x2 = np.linspace(-1, 1, 5)
         # Create meshgrid for all combinations
-        X1, X2 = np.meshgrid(x1, x2, indexing='ij')
+        X1, X2 = np.meshgrid(x1, x2, indexing="ij")
         points = np.column_stack([X1.ravel(), X2.ravel()])  # (25, 2)
 
         bases = scheme.evaluate_bases(points)

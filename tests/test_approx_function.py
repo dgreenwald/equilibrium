@@ -139,10 +139,12 @@ class TestFunction:
 
         # Vector function: [x+y, x*y]
         grid_points = func.get_grid_points()
-        values = np.column_stack([
-            grid_points[:, 0] + grid_points[:, 1],
-            grid_points[:, 0] * grid_points[:, 1],
-        ])
+        values = np.column_stack(
+            [
+                grid_points[:, 0] + grid_points[:, 1],
+                grid_points[:, 0] * grid_points[:, 1],
+            ]
+        )
 
         func.fit(values)
         assert func.coefficients is not None
@@ -223,10 +225,12 @@ class TestFunction:
 
         # Fit to [x+y, x*y]
         grid_points = func.get_grid_points()
-        values = np.column_stack([
-            grid_points[:, 0] + grid_points[:, 1],
-            grid_points[:, 0] * grid_points[:, 1],
-        ])
+        values = np.column_stack(
+            [
+                grid_points[:, 0] + grid_points[:, 1],
+                grid_points[:, 0] * grid_points[:, 1],
+            ]
+        )
         func.fit(values)
 
         # Evaluate at single point
@@ -325,7 +329,11 @@ class TestFunction:
         expected_grads[:, 1, 1] = points[:, 0]  # d/dy of xy
 
         assert basis.shape == (points.shape[0], scheme.index.size)
-        assert basis_grad.shape == (points.shape[0], scheme.dimension, scheme.index.size)
+        assert basis_grad.shape == (
+            points.shape[0],
+            scheme.dimension,
+            scheme.index.size,
+        )
 
         np.testing.assert_allclose(vals, expected_vals, atol=1e-10)
         np.testing.assert_allclose(grads, expected_grads, atol=1e-10)
@@ -386,7 +394,9 @@ class TestFunction:
 
         grid_points = func_hier.get_grid_points()
         assert np.allclose(grid_points, func_uniform.get_grid_points())
-        values = np.sin(np.pi * grid_points[:, 0]) + grid_points[:, 0] * grid_points[:, 1]
+        values = (
+            np.sin(np.pi * grid_points[:, 0]) + grid_points[:, 0] * grid_points[:, 1]
+        )
         func_hier.fit(values)
         func_uniform.fit(values)
 
@@ -446,11 +456,13 @@ class TestFunction:
         func.fit(values)
 
         # Evaluate at test points
-        test_points = np.array([
-            [0.5, 0.5],
-            [-0.5, 0.3],
-            [0.8, -0.2],
-        ])
+        test_points = np.array(
+            [
+                [0.5, 0.5],
+                [-0.5, 0.3],
+                [0.8, -0.2],
+            ]
+        )
         result = func.evaluate(test_points)
         expected = (
             test_points[:, 0] ** 2

@@ -53,9 +53,7 @@ def _make_case(case_name):
             lb=np.array([-2.0, 1.0, 10.0]),
             ub=np.array([1.0, 5.0, 14.0]),
         )
-        points = np.array(
-            [[-1.7, 1.5, 10.5], [-0.25, 3.0, 12.25], [0.8, 4.75, 13.5]]
-        )
+        points = np.array([[-1.7, 1.5, 10.5], [-0.25, 3.0, 12.25], [0.8, 4.75, 13.5]])
     elif case_name == "smolyak_3d":
         function = make_smolyak_chebyshev(
             dimension=3,
@@ -64,9 +62,7 @@ def _make_case(case_name):
             lb=np.array([-2.0, 1.0, 10.0]),
             ub=np.array([1.0, 5.0, 14.0]),
         )
-        points = np.array(
-            [[-1.7, 1.5, 10.5], [-0.25, 3.0, 12.25], [0.8, 4.75, 13.5]]
-        )
+        points = np.array([[-1.7, 1.5, 10.5], [-0.25, 3.0, 12.25], [0.8, 4.75, 13.5]])
     else:  # pragma: no cover - guarded by parametrization
         raise ValueError(f"unknown test case: {case_name}")
     return function, points
@@ -156,15 +152,11 @@ def test_evaluation_is_differentiable_in_points_and_coefficients(
     chebyshev_function,
 ):
     data = make_jax_data(chebyshev_function)
-    coefficients = jnp.arange(
-        chebyshev_function.get_n_points(), dtype=jnp.float64
-    )
+    coefficients = jnp.arange(chebyshev_function.get_n_points(), dtype=jnp.float64)
     point = jnp.array([0.2, 2.0])
 
     point_gradient = jax.grad(evaluate_jax, argnums=2)(data, coefficients, point)
-    coefficient_gradient = jax.grad(evaluate_jax, argnums=1)(
-        data, coefficients, point
-    )
+    coefficient_gradient = jax.grad(evaluate_jax, argnums=1)(data, coefficients, point)
 
     assert point_gradient.shape == (2,)
     assert coefficient_gradient.shape == coefficients.shape
@@ -199,9 +191,7 @@ def test_vmap_matches_direct_batch_evaluation(chebyshev_function):
     ).reshape(chebyshev_function.get_n_points(), 2)
     points = jnp.array([[0.2, 2.0], [1.5, 4.0], [-1.25, 1.4]])
 
-    mapped = jax.vmap(evaluate_jax, in_axes=(None, None, 0))(
-        data, coefficients, points
-    )
+    mapped = jax.vmap(evaluate_jax, in_axes=(None, None, 0))(data, coefficients, points)
     direct = evaluate_jax(data, coefficients, points)
 
     np.testing.assert_allclose(mapped, direct, rtol=1e-12, atol=1e-12)
