@@ -11,7 +11,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from numbers import Integral, Real
-from typing import NamedTuple, Sequence
+from typing import Iterator, NamedTuple, Sequence
 
 import jax
 import jax.numpy as jnp
@@ -287,6 +287,169 @@ def tensor_gauss_hermite(
     )
 
 
+def smolyak_gauss_hermite(
+    dimension: int,
+    level: int,
+    *,
+    mu: float | Sequence[float] = 0.0,
+    sigma: float | Sequence[float] = 1.0,
+    merge_tolerance: float = 1e-14,
+    weight_tolerance: float = 1e-15,
+    max_nodes: int | None = 1_000_000,
+) -> QuadratureRule:
+    """Construct a non-nested Smolyak rule for independent normal variables.
+
+    One-dimensional level ``i >= 1`` uses a normalized degree-``i``
+    Gauss-Hermite rule.  For user level ``L`` and dimension ``d``, this
+    combines positive level vectors with sums from ``max(d, L + 1)`` through
+    ``L + d``.  A vector with sum ``s`` has coefficient
+    ``(-1)**(L + d - s) * comb(d - 1, L + d - s)``.
+
+    This zero-based level convention maps to the legacy ``nwspgr`` convention
+    as ``K = L + 1``; in particular, the old default ``K=2`` is ``level=1``.
+    Level zero is the single node at the vector of marginal means.  A monomial
+    with coordinate powers ``p_j`` is exact when
+    ``sum(ceil((p_j + 1) / 2)) <= L + d``.
+
+    Smolyak combination weights can be negative and are retained.  The
+    ``max_nodes`` guard applies to the raw candidate count before coincident
+    nodes are merged, because that count determines peak setup allocation.
+    """
+
+    normalized_dimension = _normalize_sparse_dimension(dimension)
+    normalized_level = _normalize_level(level)
+    means = _normalize_distribution_parameter(mu, normalized_dimension, "mu")
+    standard_deviations = _normalize_distribution_parameter(
+        sigma, normalized_dimension, "sigma"
+    )
+    if any(value <= 0.0 for value in standard_deviations):
+        raise ValueError("sigma values must be strictly positive")
+    normalized_merge_tolerance = _finite_nonnegative_scalar(
+        merge_tolerance, "merge_tolerance"
+    )
+    normalized_weight_tolerance = _finite_nonnegative_scalar(
+        weight_tolerance, "weight_tolerance"
+    )
+    normalized_max_nodes = _normalize_max_nodes(max_nodes)
+
+    q = normalized_level + normalized_dimension
+    level_vectors = [
+        level_vector
+        for level_sum in range(max(normalized_dimension, normalized_level + 1), q + 1)
+        for level_vector in _positive_compositions(level_sum, normalized_dimension)
+    ]
+    raw_node_count = sum(math.prod(level_vector) for level_vector in level_vectors)
+    if normalized_max_nodes is not None and raw_node_count > normalized_max_nodes:
+        raise ValueError(
+            f"Smolyak rule requires {raw_node_count} candidate nodes, exceeding "
+            f"max_nodes={normalized_max_nodes}"
+        )
+
+    component_nodes: list[np.ndarray] = []
+    component_weights: list[np.ndarray] = []
+    for level_vector in level_vectors:
+        level_sum = sum(level_vector)
+        coefficient = (-1) ** (q - level_sum) * math.comb(
+            normalized_dimension - 1, q - level_sum
+        )
+        component = tensor_gauss_hermite(
+            level_vector,
+            mu=means,
+            sigma=standard_deviations,
+            max_nodes=None,
+        )
+        component_nodes.append(component.nodes)
+        component_weights.append(coefficient * component.weights)
+
+    nodes = np.concatenate(component_nodes, axis=0)
+    weights = np.concatenate(component_weights)
+    nodes, weights = _merge_nodes(nodes, weights, tolerance=normalized_merge_tolerance)
+    retained = np.abs(weights) > normalized_weight_tolerance
+    nodes = nodes[retained]
+    weights = weights[retained]
+    if weights.size == 0:
+        raise ValueError("weight_tolerance removed every Smolyak node")
+
+    weight_sum = float(weights.sum())
+    if not np.isclose(weight_sum, 1.0, rtol=0.0, atol=_WEIGHT_SUM_TOLERANCE):
+        raise ValueError(
+            "Smolyak weights do not sum to one after duplicate merging and "
+            "weight filtering"
+        )
+    weights = weights / weight_sum
+
+    return QuadratureRule(
+        nodes=nodes,
+        weights=weights,
+        kind="smolyak",
+        orders=None,
+        level=normalized_level,
+    )
+
+
+def _positive_compositions(total: int, parts: int) -> Iterator[tuple[int, ...]]:
+    """Yield positive integer compositions in lexicographic order."""
+
+    if parts == 1:
+        yield (total,)
+        return
+    for first in range(1, total - parts + 2):
+        for remainder in _positive_compositions(total - first, parts - 1):
+            yield (first, *remainder)
+
+
+def _merge_nodes(
+    nodes: np.ndarray, weights: np.ndarray, *, tolerance: float
+) -> tuple[np.ndarray, np.ndarray]:
+    """Lexicographically sort and merge coordinatewise-close nodes."""
+
+    sort_keys = tuple(
+        nodes[:, coordinate] for coordinate in range(nodes.shape[1] - 1, -1, -1)
+    )
+    ordering = np.lexsort(sort_keys)
+    sorted_nodes = nodes[ordering]
+    sorted_weights = weights[ordering]
+
+    merged_nodes: list[np.ndarray] = []
+    merged_weights: list[float] = []
+    first_active = 0
+    for node, weight in zip(sorted_nodes, sorted_weights):
+        while (
+            first_active < len(merged_nodes)
+            and node[0] - merged_nodes[first_active][0] > tolerance
+        ):
+            first_active += 1
+
+        match = None
+        for candidate in range(first_active, len(merged_nodes)):
+            if np.all(np.abs(node - merged_nodes[candidate]) <= tolerance):
+                match = candidate
+                break
+        if match is None:
+            merged_nodes.append(node.copy())
+            merged_weights.append(float(weight))
+        else:
+            merged_weights[match] += float(weight)
+
+    return np.stack(merged_nodes), np.asarray(merged_weights)
+
+
+def _normalize_sparse_dimension(dimension: int) -> int:
+    if (
+        not isinstance(dimension, Integral)
+        or isinstance(dimension, bool)
+        or dimension < 1
+    ):
+        raise ValueError("dimension must be a positive integer")
+    return int(dimension)
+
+
+def _normalize_level(level: int) -> int:
+    if not isinstance(level, Integral) or isinstance(level, bool) or level < 0:
+        raise ValueError("level must be a nonnegative integer")
+    return int(level)
+
+
 def _normalize_dimension(dimension: int | None) -> int | None:
     if dimension is None:
         return None
@@ -353,6 +516,13 @@ def _normalize_max_nodes(max_nodes: int | None) -> int | None:
     ):
         raise ValueError("max_nodes must be a positive integer or None")
     return int(max_nodes)
+
+
+def _finite_nonnegative_scalar(value: object, name: str) -> float:
+    scalar = _finite_scalar(value, name)
+    if scalar < 0.0:
+        raise ValueError(f"{name} must be nonnegative")
+    return scalar
 
 
 def _finite_scalar(value: object, name: str) -> float:

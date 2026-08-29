@@ -11,8 +11,10 @@ from equilibrium.solvers.quadrature import (
     JaxExogenousProcess,
     JaxQuadratureRule,
     QuadratureRule,
+    _merge_nodes,
     deterministic_quadrature,
     gauss_hermite_normal,
+    smolyak_gauss_hermite,
     tensor_gauss_hermite,
 )
 
@@ -410,3 +412,226 @@ def test_tensor_rule_rejects_invalid_distribution_parameters(
 def test_tensor_rule_rejects_invalid_max_nodes(max_nodes) -> None:
     with pytest.raises(ValueError, match="max_nodes"):
         tensor_gauss_hermite(2, max_nodes=max_nodes)
+
+
+@pytest.mark.parametrize(
+    ("dimension", "expected_counts"),
+    [
+        (1, (1, 2, 3, 4)),
+        (2, (1, 5, 13, 29)),
+        (3, (1, 7, 25, 69)),
+        (4, (1, 9, 41, 137)),
+    ],
+)
+def test_smolyak_node_counts_and_contract(
+    dimension: int, expected_counts: tuple[int, ...]
+) -> None:
+    for level, expected_count in enumerate(expected_counts):
+        rule = smolyak_gauss_hermite(dimension, level)
+
+        assert rule.kind == "smolyak"
+        assert rule.orders is None
+        assert rule.level == level
+        assert rule.dimension == dimension
+        assert rule.n_nodes == expected_count
+        assert np.all(np.isfinite(rule.nodes))
+        assert np.all(np.isfinite(rule.weights))
+        assert rule.weights.sum() == pytest.approx(1.0, abs=5e-15)
+
+        sort_keys = tuple(
+            rule.nodes[:, coordinate]
+            for coordinate in range(rule.dimension - 1, -1, -1)
+        )
+        np.testing.assert_array_equal(np.lexsort(sort_keys), np.arange(rule.n_nodes))
+
+
+def test_smolyak_one_dimensional_level_two_fixture() -> None:
+    rule = smolyak_gauss_hermite(1, 2)
+
+    np.testing.assert_allclose(rule.nodes[:, 0], [-np.sqrt(3.0), 0.0, np.sqrt(3.0)])
+    np.testing.assert_allclose(rule.weights, [1.0 / 6.0, 2.0 / 3.0, 1.0 / 6.0])
+
+
+def test_smolyak_two_dimensional_level_one_fixture() -> None:
+    rule = smolyak_gauss_hermite(2, 1)
+
+    expected_nodes = np.array(
+        [[-1.0, 0.0], [0.0, -1.0], [0.0, 0.0], [0.0, 1.0], [1.0, 0.0]]
+    )
+    expected_weights = np.array([0.5, 0.5, -1.0, 0.5, 0.5])
+    np.testing.assert_allclose(rule.nodes, expected_nodes, atol=1e-15)
+    np.testing.assert_allclose(rule.weights, expected_weights, atol=1e-15)
+    assert np.any(rule.weights < 0.0)
+
+
+def test_smolyak_two_dimensional_level_two_fixture() -> None:
+    root_three = np.sqrt(3.0)
+    rule = smolyak_gauss_hermite(2, 2)
+    expected_nodes = np.array(
+        [
+            [-root_three, 0.0],
+            [-1.0, -1.0],
+            [-1.0, 0.0],
+            [-1.0, 1.0],
+            [0.0, -root_three],
+            [0.0, -1.0],
+            [0.0, 0.0],
+            [0.0, 1.0],
+            [0.0, root_three],
+            [1.0, -1.0],
+            [1.0, 0.0],
+            [1.0, 1.0],
+            [root_three, 0.0],
+        ]
+    )
+    expected_weights = np.array(
+        [
+            1.0 / 6.0,
+            1.0 / 4.0,
+            -1.0 / 2.0,
+            1.0 / 4.0,
+            1.0 / 6.0,
+            -1.0 / 2.0,
+            4.0 / 3.0,
+            -1.0 / 2.0,
+            1.0 / 6.0,
+            1.0 / 4.0,
+            -1.0 / 2.0,
+            1.0 / 4.0,
+            1.0 / 6.0,
+        ]
+    )
+    np.testing.assert_allclose(rule.nodes, expected_nodes, atol=1e-15)
+    np.testing.assert_allclose(rule.weights, expected_weights, atol=1e-15)
+
+
+def test_smolyak_level_zero_is_node_at_marginal_means() -> None:
+    means = (-2.0, 0.5, 4.0)
+    rule = smolyak_gauss_hermite(3, 0, mu=means, sigma=(0.2, 1.0, 3.0))
+
+    np.testing.assert_array_equal(rule.nodes, [means])
+    np.testing.assert_array_equal(rule.weights, [1.0])
+
+
+def test_smolyak_nonstandard_normal_moments() -> None:
+    means = np.array([-1.0, 0.5, 2.0])
+    sigmas = np.array([0.4, 1.5, 2.5])
+    level_one = smolyak_gauss_hermite(3, 1, mu=means, sigma=sigmas)
+    centered_one = level_one.nodes - means
+
+    np.testing.assert_allclose(level_one.integrate(level_one.nodes), means, atol=2e-14)
+    covariance = np.einsum("n,ni,nj->ij", level_one.weights, centered_one, centered_one)
+    np.testing.assert_allclose(covariance, np.diag(sigmas**2), atol=3e-14)
+
+    level_two = smolyak_gauss_hermite(3, 2, mu=means, sigma=sigmas)
+    centered_two = level_two.nodes - means
+    for coordinate in range(3):
+        fourth_moment = level_two.integrate(centered_two[:, coordinate] ** 4)
+        assert fourth_moment == pytest.approx(3.0 * sigmas[coordinate] ** 4)
+    mixed_moment = level_two.integrate(
+        centered_two[:, 0] ** 2 * centered_two[:, 2] ** 2
+    )
+    assert mixed_moment == pytest.approx(sigmas[0] ** 2 * sigmas[2] ** 2)
+
+
+@pytest.mark.parametrize("dimension", range(1, 5))
+@pytest.mark.parametrize("level", range(4))
+def test_smolyak_is_symmetric_and_deterministic(dimension: int, level: int) -> None:
+    first = smolyak_gauss_hermite(dimension, level)
+    second = smolyak_gauss_hermite(dimension, level)
+
+    np.testing.assert_array_equal(first.nodes, second.nodes)
+    np.testing.assert_array_equal(first.weights, second.weights)
+    for coordinate in range(dimension):
+        assert first.integrate(first.nodes[:, coordinate] ** 3) == pytest.approx(
+            0.0, abs=2e-14
+        )
+
+
+def test_merge_nodes_uses_coordinatewise_tolerance_and_earliest_node() -> None:
+    nodes = np.array([[1.0, 0.0], [5e-15, -5e-15], [2e-14, 0.0], [0.0, 0.0]])
+    weights = np.array([1.0, 0.75, 2.0, 0.25])
+
+    merged_nodes, merged_weights = _merge_nodes(nodes, weights, tolerance=1e-14)
+
+    np.testing.assert_array_equal(merged_nodes, [[0.0, 0.0], [2e-14, 0.0], [1.0, 0.0]])
+    np.testing.assert_array_equal(merged_weights, [1.0, 2.0, 1.0])
+
+
+def test_smolyak_weight_filter_cannot_hide_invalid_sum() -> None:
+    with pytest.raises(ValueError, match="do not sum to one"):
+        smolyak_gauss_hermite(2, 1, weight_tolerance=0.75)
+    with pytest.raises(ValueError, match="removed every"):
+        smolyak_gauss_hermite(2, 1, weight_tolerance=1.0)
+
+
+def test_smolyak_allocation_guard_runs_before_tensor_construction(monkeypatch) -> None:
+    def unexpected_constructor(*args, **kwargs):
+        raise AssertionError("tensor component was constructed")
+
+    monkeypatch.setattr(
+        "equilibrium.solvers.quadrature.tensor_gauss_hermite",
+        unexpected_constructor,
+    )
+    with pytest.raises(ValueError, match="165 candidate nodes"):
+        smolyak_gauss_hermite(4, 3, max_nodes=164)
+
+
+def test_smolyak_allocation_guard_can_be_disabled() -> None:
+    assert smolyak_gauss_hermite(2, 2, max_nodes=None).n_nodes == 13
+
+
+def test_smolyak_sparse_and_tensor_smooth_function_accuracy() -> None:
+    sparse = smolyak_gauss_hermite(4, 3)
+    tensor = tensor_gauss_hermite(4, dimension=4)
+    exact = np.exp(0.08)
+    sparse_value = sparse.integrate(np.exp(0.2 * sparse.nodes.sum(axis=1)))
+    tensor_value = tensor.integrate(np.exp(0.2 * tensor.nodes.sum(axis=1)))
+
+    assert sparse.n_nodes == 137
+    assert tensor.n_nodes == 256
+    assert sparse.n_nodes < tensor.n_nodes
+    assert abs(sparse_value - exact) < 2e-6
+    assert abs(tensor_value - exact) < 1e-8
+
+
+@pytest.mark.parametrize("dimension", [0, -1, 1.5, True])
+def test_smolyak_rejects_invalid_dimension(dimension) -> None:
+    with pytest.raises(ValueError, match="dimension must be a positive integer"):
+        smolyak_gauss_hermite(dimension, 1)
+
+
+@pytest.mark.parametrize("level", [-1, 1.5, True])
+def test_smolyak_rejects_invalid_level(level) -> None:
+    with pytest.raises(ValueError, match="level must be a nonnegative integer"):
+        smolyak_gauss_hermite(2, level)
+
+
+@pytest.mark.parametrize(
+    ("parameter", "value", "message"),
+    [
+        ("mu", [0.0], "one entry per dimension"),
+        ("mu", [0.0, np.nan], "finite real scalar"),
+        ("sigma", [1.0], "one entry per dimension"),
+        ("sigma", [1.0, 0.0], "strictly positive"),
+        ("sigma", [1.0, np.inf], "finite real scalar"),
+    ],
+)
+def test_smolyak_rejects_invalid_distribution_parameters(
+    parameter, value, message
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        smolyak_gauss_hermite(2, 1, **{parameter: value})
+
+
+@pytest.mark.parametrize("name", ["merge_tolerance", "weight_tolerance"])
+@pytest.mark.parametrize("value", [-1.0, np.nan, np.inf, True, "small"])
+def test_smolyak_rejects_invalid_tolerances(name, value) -> None:
+    with pytest.raises(ValueError, match=name):
+        smolyak_gauss_hermite(2, 1, **{name: value})
+
+
+@pytest.mark.parametrize("max_nodes", [0, -1, 1.5, True, "100"])
+def test_smolyak_rejects_invalid_max_nodes(max_nodes) -> None:
+    with pytest.raises(ValueError, match="max_nodes"):
+        smolyak_gauss_hermite(2, 1, max_nodes=max_nodes)
