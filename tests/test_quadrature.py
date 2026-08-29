@@ -1,5 +1,7 @@
 """Tests for quadrature and exogenous-process data containers."""
 
+import math
+
 import jax
 import numpy as np
 import pytest
@@ -10,6 +12,7 @@ from equilibrium.solvers.quadrature import (
     JaxQuadratureRule,
     QuadratureRule,
     deterministic_quadrature,
+    gauss_hermite_normal,
 )
 
 jax.config.update("jax_enable_x64", True)
@@ -192,3 +195,73 @@ def test_zero_dimensional_exogenous_process() -> None:
 
     assert process.persistence.shape == (0, 0)
     assert process.innovation_impact.shape == (0, 0)
+
+
+@pytest.mark.parametrize("degree", [1, 2, 3, 5, 10])
+def test_gauss_hermite_standard_normal_contract(degree: int) -> None:
+    rule = gauss_hermite_normal(degree)
+
+    assert rule.nodes.shape == (degree, 1)
+    assert rule.weights.shape == (degree,)
+    assert rule.kind == "tensor"
+    assert rule.orders == (degree,)
+    assert np.all(rule.weights > 0.0)
+    assert rule.weights.sum() == pytest.approx(1.0, abs=1e-15)
+    np.testing.assert_allclose(rule.nodes[:, 0], -rule.nodes[::-1, 0], atol=1e-14)
+    np.testing.assert_allclose(rule.weights, rule.weights[::-1], atol=1e-15)
+
+
+@pytest.mark.parametrize("degree", [1, 2, 3, 5, 10])
+def test_gauss_hermite_exact_standard_normal_moments(degree: int) -> None:
+    rule = gauss_hermite_normal(degree)
+    nodes = rule.nodes[:, 0]
+
+    for power in range(2 * degree):
+        expected = 0.0 if power % 2 else math.prod(range(1, power, 2))
+        actual = rule.integrate(nodes**power)
+        assert actual == pytest.approx(expected, rel=2e-12, abs=1e-9)
+
+
+def test_gauss_hermite_nonstandard_normal_moments() -> None:
+    mu = -1.25
+    sigma = 2.5
+    rule = gauss_hermite_normal(5, mu=mu, sigma=sigma)
+    nodes = rule.nodes[:, 0]
+
+    assert rule.integrate(nodes) == pytest.approx(mu)
+    assert rule.integrate((nodes - mu) ** 2) == pytest.approx(sigma**2)
+    assert rule.integrate((nodes - mu) ** 3) == pytest.approx(0.0, abs=1e-13)
+
+
+def test_gauss_hermite_matches_reference_convention() -> None:
+    degree = 4
+    mu = 0.75
+    sigma = 1.6
+    reference_nodes, reference_weights = np.polynomial.hermite.hermgauss(degree)
+    reference_weights /= reference_weights.sum()
+    reference_nodes = mu + np.sqrt(2.0) * sigma * reference_nodes
+
+    rule = gauss_hermite_normal(degree, mu=mu, sigma=sigma)
+
+    np.testing.assert_array_equal(rule.nodes[:, 0], reference_nodes)
+    np.testing.assert_array_equal(rule.weights, reference_weights)
+
+
+@pytest.mark.parametrize("degree", [0, -1, 1.5, True, "3"])
+def test_gauss_hermite_rejects_invalid_degree(degree) -> None:
+    with pytest.raises(ValueError, match="degree must be a positive integer"):
+        gauss_hermite_normal(degree)
+
+
+@pytest.mark.parametrize("mu", [np.nan, np.inf, -np.inf, True, 1.0j, [0.0]])
+def test_gauss_hermite_rejects_invalid_mean(mu) -> None:
+    with pytest.raises(ValueError, match="mu must be a finite real scalar"):
+        gauss_hermite_normal(3, mu=mu)
+
+
+@pytest.mark.parametrize(
+    "sigma", [0.0, -1.0, np.nan, np.inf, -np.inf, True, 1.0j, [1.0]]
+)
+def test_gauss_hermite_rejects_invalid_sigma(sigma) -> None:
+    with pytest.raises(ValueError, match="sigma"):
+        gauss_hermite_normal(3, sigma=sigma)

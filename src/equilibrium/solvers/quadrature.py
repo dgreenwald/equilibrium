@@ -9,6 +9,7 @@ through JAX transformations without making static metadata part of a trace.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from numbers import Integral, Real
 from typing import NamedTuple
 
 import jax
@@ -182,6 +183,49 @@ def deterministic_quadrature() -> QuadratureRule:
         kind="deterministic",
         orders=(),
     )
+
+
+def gauss_hermite_normal(
+    degree: int,
+    *,
+    mu: float = 0.0,
+    sigma: float = 1.0,
+) -> QuadratureRule:
+    """Construct a Gauss-Hermite rule for ``N(mu, sigma**2)``.
+
+    A rule with ``degree`` nodes integrates polynomials through degree
+    ``2 * degree - 1`` exactly, up to floating-point roundoff.  NumPy's
+    physicists' Hermite rule is normalized and its nodes are multiplied by
+    ``sqrt(2) * sigma`` to convert its ``exp(-x**2)`` weighting to a normal
+    probability distribution.
+    """
+
+    if not isinstance(degree, Integral) or isinstance(degree, bool) or degree < 1:
+        raise ValueError("degree must be a positive integer")
+    degree = int(degree)
+    mu = _finite_scalar(mu, "mu")
+    sigma = _finite_scalar(sigma, "sigma")
+    if sigma <= 0.0:
+        raise ValueError("sigma must be strictly positive")
+
+    nodes, weights = np.polynomial.hermite.hermgauss(degree)
+    weights = weights / weights.sum()
+    nodes = mu + np.sqrt(2.0) * sigma * nodes
+    return QuadratureRule(
+        nodes=nodes[:, np.newaxis],
+        weights=weights,
+        kind="tensor",
+        orders=(degree,),
+    )
+
+
+def _finite_scalar(value: object, name: str) -> float:
+    if not isinstance(value, Real) or isinstance(value, bool):
+        raise ValueError(f"{name} must be a finite real scalar")
+    scalar = float(value)
+    if not np.isfinite(scalar):
+        raise ValueError(f"{name} must be a finite real scalar")
+    return scalar
 
 
 def _immutable_float_array(value: object, name: str) -> np.ndarray:
