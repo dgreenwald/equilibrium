@@ -74,6 +74,12 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src pytest -p no:cacheprovider \
   tests/test_scheme.py
 ```
 
+The same seven modules were ported to Equilibrium in work package 3 with their
+assertions and tolerances unchanged. All 146 behavioral tests passed in the
+Equilibrium namespace. Three additional package-level tests cover the public
+export set, benchmark exclusion, and external-import isolation, giving 149
+passing approximation tests after the port.
+
 ## Equilibrium-specific changes
 
 Work package 2 made the following changes from the upstream baseline:

@@ -325,6 +325,12 @@ Add one packaging/import test that confirms:
 Exit criterion: all ported NumPy tests pass in Equilibrium with no changes to
 expected numerical results.
 
+Status: **complete on 2026-08-28**. All seven non-benchmark upstream test
+modules were ported with namespace and formatting changes only. Their 146 tests
+pass unchanged, and three Equilibrium-specific package tests verify the exact
+public API, benchmark exclusion, and absence of external `funcapprox` imports
+for a total of 149 passing approximation tests.
+
 ### Work package 4: Implement the stateless Chebyshev JAX kernel
 
 1. Add `jax_eval.py` with coordinate transformation, one-dimensional
