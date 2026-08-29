@@ -54,6 +54,8 @@ packages = ["src/equilibrium"]
 include = [
   "src/equilibrium/templates/**/*.jinja",
   "src/equilibrium/templates/**/*.template",
+  "src/equilibrium/approx/py.typed",
+  "src/equilibrium/approx/UPSTREAM.md",
 ]
 
 [tool.hatch.build.targets.sdist]

@@ -76,13 +76,15 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src pytest -p no:cacheprovider \
 
 ## Equilibrium-specific changes
 
-Populate this section as the port proceeds. Planned changes are:
+Work package 2 made the following changes from the upstream baseline:
 
 1. Change the package namespace from `funcapprox` to `equilibrium.approx`.
 2. Remove the top-level benchmark export.
 3. Format the port to Equilibrium's Black and Ruff configuration.
-4. Add a stateless, Chebyshev-first JAX evaluation layer in `jax_eval.py`.
-5. Keep grid construction, fitting, and the compatibility API NumPy-based.
+4. Keep grid construction, fitting, and the compatibility API NumPy-based.
+
+The stateless, Chebyshev-first JAX evaluation layer planned for `jax_eval.py`
+will be recorded here when it is added in work package 4.
 
 ## Future synchronization procedure
 

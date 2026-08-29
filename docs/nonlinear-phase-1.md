@@ -290,6 +290,12 @@ passed under Python 3.13.5 and pytest 8.4.1.
 Exit criterion: the package imports without `funcapprox` installed and exposes
 the intended NumPy API.
 
+Status: **complete on 2026-08-28**. The frozen runtime tree was copied into
+`equilibrium.approx`, imports were rewritten to the in-tree namespace, the
+benchmark export was removed, Black formatting and Ruff checks passed, and an
+API smoke test confirmed that no external `funcapprox` import is required.
+`py.typed` and `UPSTREAM.md` were added explicitly to the wheel include list.
+
 ### Work package 3: Port and organize upstream tests
 
 Port tests into module-aligned files:
