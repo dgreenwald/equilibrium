@@ -89,8 +89,10 @@ Work package 2 made the following changes from the upstream baseline:
 3. Format the port to Equilibrium's Black and Ruff configuration.
 4. Keep grid construction, fitting, and the compatibility API NumPy-based.
 
-The stateless, Chebyshev-first JAX evaluation layer planned for `jax_eval.py`
-will be recorded here when it is added in work package 4.
+5. Add a stateless, Chebyshev-first JAX evaluation layer in `jax_eval.py`.
+   Coefficients are explicit traced inputs; immutable scheme arrays and static
+   shape metadata are carried by a dedicated JAX PyTree. Hat schemes remain
+   available through NumPy and are rejected by the JAX adapter.
 
 ## Future synchronization procedure
 

@@ -350,6 +350,14 @@ for a total of 149 passing approximation tests.
 Exit criterion: Chebyshev evaluation is pure, JIT-compatible, batch-compatible,
 and differentiable with respect to both points and coefficients.
 
+Status: **complete on 2026-08-28**. `jax_eval.py` now provides an immutable
+PyTree adapter, stateless sparse Chebyshev basis assembly, and scalar/vector
+evaluation with explicit coefficients. Eager and JIT evaluation match the
+NumPy implementation; automatic differentiation works for points and
+coefficients; invalid shapes fail clearly; and hat schemes are rejected at the
+adapter boundary. Focused contract tests were added ahead of the broader work
+package 5 parity matrix.
+
 ### Work package 5: JAX parity and transformation tests
 
 Add `tests/test_approx_jax.py` covering:

@@ -18,6 +18,12 @@ from .grids import (
     UniformGrid1d,
     UniformGridWithBoundary1d,
 )
+from .jax_eval import (
+    JaxApproximationData,
+    evaluate_bases_jax,
+    evaluate_jax,
+    make_jax_data,
+)
 from .levels import Levels, SmolyakInteriorLevels, SmolyakLevels, TensorProductLevels
 from .presets import (
     VALID_FUNCAPPROX_NAMES,
@@ -67,4 +73,8 @@ __all__ = [
     "make_funcapprox",
     "VALID_FUNCAPPROX_NAMES",
     "create_approximation",
+    "JaxApproximationData",
+    "make_jax_data",
+    "evaluate_bases_jax",
+    "evaluate_jax",
 ]
