@@ -3,7 +3,7 @@
 Contributors help maintain the high-performance JAX pipeline in Equilibrium; the points below keep changes aligned and reproducible.
 
 ## Project Structure & Module Organization
-- `src/equilibrium/` contains the installable package: `core/` manages rule transforms and code generation, `model/` exposes the `Model` API plus linearization, `solvers/` hosts deterministic/Newton/perturbation routines, `templates/` stores Jinja snippets, and `utils/` provides typed containers and helpers.
+- `src/equilibrium/` contains the installable package. `core/` manages rule transforms and code generation; `model/` exposes model, block, derivative, and linearization APIs; `solvers/` hosts calibration, deterministic, Newton, and perturbation routines; `estimation/` contains state-space, likelihood, MCMC, and estimation tools; `io/` and `plot/` handle results export and visualization; `cli/` implements the `equilibrium init` scaffold; and `templates/` and `utils/` provide generated-code templates and shared helpers.
 - `tests/` holds the pytest suite; reuse fixtures from the RBC examples and keep large artifacts isolated (see `tests/UX_benchmark.npy`).
 - `scripts/relativize_imports.py` is a maintenance helper for path hygiene; touch it only when reorganizing imports.
 
@@ -14,9 +14,9 @@ Contributors help maintain the high-performance JAX pipeline in Equilibrium; the
 
 ## Build, Test, and Development Commands
 - `pytest` (or `python -m pytest`) runs the full suite with verbose output configured via `pyproject.toml`; run after `pip install -e .[dev]` or export `PYTHONPATH=src`.
-- `ruff check equilibrium tests` enforces lint rules; run `ruff check --fix` when the automatic edits are safe.
+- `ruff check src/equilibrium tests` enforces lint rules; run `ruff check --fix src/equilibrium tests` when the automatic edits are safe.
 - `black .` formats the tree at 88 columns, matching CI expectations.
-- `mypy equilibrium` validates type hints across the NamedTuple-heavy APIs.
+- `mypy src/equilibrium` validates type hints across the package. MyPy is available to developers but is not currently enforced by pre-commit.
 
 ## Coding Style & Naming Conventions
 - Follow PEP 8 with 4-space indents; let `black` manage layout and trailing commas in multi-line literals.

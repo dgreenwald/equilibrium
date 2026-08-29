@@ -127,8 +127,7 @@ model.solve_steady(calibrate=False)
 model.linearize()
 
 # Compute impulse response functions
-model.compute_linear_irfs(Nt_irf=20)
-irfs = model.linear_mod.irf  # Access the computed IRFs
+irfs = model.compute_linear_irfs(Nt_irf=20, save_irfs=False)
 
 # Simulate the model
 simulation = model.simulate_linear(Nt=100)
@@ -153,6 +152,7 @@ This creates a minimal project structure with a working example:
 - **parameters.py**: Parameter values and steady-state guesses
 - **constants.py**: Plotting configuration (variables, titles, styling)
 - **.env**: Environment variable configuration (optional)
+- **.gitignore** and **README.md**: Project defaults and workflow notes
 
 All files are well-documented with inline comments explaining how to customize for your own model. The RBC example runs immediately so you can see the full workflow in action.
 
@@ -203,15 +203,14 @@ and financial frictions across projects.
 from equilibrium.model import Model, ModelBlock, model_block
 
 @model_block
-def production_block(mod: Model) -> ModelBlock:
-    mod.rules["intermediate"] += [
+def production_block(block: ModelBlock):
+    block.rules["intermediate"] += [
         ("y", "Z * (K ** alp)"),
         ("w", "(1 - alp) * y / L"),
     ]
-    return ModelBlock(mod)
 
 model = Model()
-model.add_block(production_block(model))
+model.add_block(production_block())
 ```
 
 ## Advanced Usage
@@ -243,14 +242,14 @@ from equilibrium import calibrate, PointTarget, RegimeParam, ModelParam
 
 # Define calibration targets
 targets = [
-    PointTarget(var_name='K', target=6.0, regime=0),
-    PointTarget(var_name='Y', target=1.5, regime=0),
+    PointTarget(variable='K', time=20, value=6.0),
+    PointTarget(variable='Y', time=20, value=1.5),
 ]
 
 # Specify parameters to calibrate with typed inputs
 params_to_calibrate = [
-    RegimeParam(name='bet', regime=0, initial_guess=0.95),
-    ModelParam(name='delta', initial_guess=0.1),
+    RegimeParam(name='bet', regime=0, initial=0.95, bounds=(0.90, 0.99)),
+    ModelParam(name='delta', initial=0.1, bounds=(0.01, 0.20)),
 ]
 
 # Run calibration
@@ -258,12 +257,11 @@ result = calibrate(
     model=model,
     spec=det_spec,  # DetSpec defining regimes
     targets=targets,
-    params_to_calibrate=params_to_calibrate,
-    Nt=100,
+    calib_params=params_to_calibrate,
 )
 
 # Access calibrated values
-print(f"Calibrated beta: {result.calibrated_params['bet']}")
+print(f"Calibrated beta: {result.parameters['bet']}")
 ```
 
 #### Saving and Loading Calibrated Parameters
@@ -311,7 +309,7 @@ spec = DetSpec()
 
 # Add regime 0 with baseline parameters and a shock
 spec.add_regime(0, preset_par_regime={"tau": 0.3})
-spec.add_shock(0, "z_tfp", per=0, val=0.01)  # TFP shock at period 0
+spec.add_shock(0, "z_tfp", shock_per=0, shock_val=0.01)
 
 # Add regime 1 with different parameters, starting at period 20
 spec.add_regime(1, preset_par_regime={"tau": 0.35}, time_regime=20)
@@ -381,8 +379,8 @@ The main class for defining and solving DSGE models.
 - `solve_steady(calibrate=False)`: Solves for steady-state values
 - `linearize()`: Linearizes model around steady state
 - `simulate_linear(Nt, s_init=None, shocks=None)`: Simulates linearized model
-- `compute_linear_irfs(Nt_irf)`: Computes impulse response functions (stored in `model.linear_mod.irf`)
-- `add_exog(var_name, pers=0.0, vol=0.0)`: Adds exogenous AR(1) process
+- `compute_linear_irfs(Nt_irf)`: Computes and returns impulse response functions; the full tensor is also stored in `model.linear_mod.irfs`
+- `add_exog(var, pers=None, vol=None)`: Adds an exogenous process and optionally sets its persistence and volatility parameters
 
 ## Performance Tips
 
@@ -456,8 +454,9 @@ pre-commit install
 pytest
 # Or run a specific test file
 pytest tests/test_deterministic.py
-# Or run directly with python
-python tests/test_deterministic.py
+# Lint and type-check the package
+ruff check src/equilibrium tests
+mypy src/equilibrium
 ```
 
 ### Pre-commit Hooks
