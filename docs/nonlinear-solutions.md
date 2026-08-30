@@ -295,13 +295,19 @@ class CollocationResult:
 Implementation details and validation results are recorded in
 [`docs/nonlinear-phase-1.md`](nonlinear-phase-1.md).
 
-### Phase 2: Quadrature infrastructure
+### Phase 2: Quadrature infrastructure (complete)
 
 1. Add `src/equilibrium/solvers/quadrature.py` with:
    - A normalized Gauss-Hermite nodes/weights generator matching `ghquad_norm()` (`hermgauss`, weights summing to one, nodes scaled by `sqrt(2) * sig` and shifted by `mu`).
    - Tensor-product rules for a small number of independent shocks.
    - A separately validated sparse quadrature rule for higher-dimensional shock models.
    - Utility to compute next-period exogenous states given quadrature nodes.
+
+The completed implementation provides immutable NumPy containers, array-only
+JAX data, normalized one-dimensional and tensor rules, a signed-weight Smolyak
+rule, explicit `PERS_*`/`VOL_*` model scaling, and differentiable single or
+batched JAX transitions. API decisions, sparse-level semantics, and validation
+are recorded in [`docs/nonlinear-phase-2.md`](nonlinear-phase-2.md).
 
 ### Phase 3: Collocation solver core
 

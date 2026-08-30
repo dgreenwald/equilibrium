@@ -97,6 +97,71 @@ The JAX path supports:
 - batched points shaped `(n_eval, dimension)`;
 - `jax.jit`, `jax.vmap`, `jax.jacfwd`, and `jax.jacrev`.
 
+## Gaussian quadrature
+
+`equilibrium.solvers` provides setup-time NumPy quadrature rules for nonlinear
+expectations. All rules store nodes in rows with shape
+`(n_nodes, dimension)` and normalized weights with shape `(n_nodes,)`:
+
+```python
+from equilibrium.solvers import (
+    gauss_hermite_normal,
+    smolyak_gauss_hermite,
+    tensor_gauss_hermite,
+)
+
+one_dimensional = gauss_hermite_normal(5)
+tensor = tensor_gauss_hermite(3, dimension=2)
+sparse = smolyak_gauss_hermite(dimension=4, level=2)
+
+# Values may have additional axes; select the quadrature-node axis explicitly.
+expectation = tensor.integrate(values, axis=0)
+```
+
+`gauss_hermite_normal(n, mu=..., sigma=...)` integrates against a normal
+distribution and is exact for univariate polynomials through degree
+`2*n - 1`. Tensor rules accept isotropic or per-dimension degrees and are best
+suited to a small number of independent innovations. Their default 100,000-node
+allocation guard can be changed with `max_nodes`.
+
+The Smolyak constructor uses non-nested Gauss-Hermite rules with linear growth:
+one-dimensional level `i` has degree `i`. Its public level is zero-based;
+`level=0` is the mean node, and the legacy C++ `nwspgr` level is
+`K = level + 1`. Sparse combination weights may be negative and must not be
+treated as probabilities or clipped. The default allocation guard applies to
+raw component nodes before coincident nodes are merged.
+
+Rule construction stays outside JIT. Convert a completed rule once and pass its
+array-only representation into compiled code:
+
+```python
+import jax
+import jax.numpy as jnp
+
+from equilibrium.solvers import (
+    exogenous_process_from_model,
+    next_exogenous_states_jax,
+)
+
+jax_rule = tensor.as_jax()
+process = exogenous_process_from_model(model).as_jax()
+z_current = jnp.zeros(len(model.exog_list))
+
+z_next = jax.jit(next_exogenous_states_jax)(
+    process, z_current, jax_rule.nodes
+)
+expected_value = jnp.tensordot(jax_rule.weights, integrand(z_next), axes=1)
+```
+
+Quadrature nodes used with a model represent standardized structural
+innovations. By default, `exogenous_process_from_model()` constructs
+`Phi = diag(PERS_<name>)` and `L = diag(VOL_<name>)`, then applies
+`z_next = Phi @ z + L @ epsilon`. Explicit full `Phi` and rectangular `L`
+matrices are supported. The resolver never reads or composes
+`linear_mod.impact_matrix`, preventing accidental double application of shock
+volatility. A model without exogenous innovations uses
+`deterministic_quadrature()`, whose single node has shape `(1, 0)`.
+
 ## Current boundaries
 
 - JAX evaluation currently supports Chebyshev schemes only. Passing a hat or
@@ -114,6 +179,7 @@ The approximation tests are isolated under `tests/test_approx_*.py`:
 
 ```bash
 pytest tests/test_approx_*.py
+pytest tests/test_quadrature.py
 ruff check src/equilibrium/approx tests/test_approx_*.py
 ```
 

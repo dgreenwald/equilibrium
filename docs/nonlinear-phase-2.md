@@ -15,6 +15,18 @@ expectation terms used by the nonlinear collocation solver. It establishes:
 This phase does **not** implement collocation residuals, time iteration, stacked
 Newton, endogenous-state transitions, simulation, or nonlinear IRFs.
 
+## Status
+
+Phase 2 was completed on 2026-08-29. All six work packages were implemented
+with the proposed API and no new runtime dependency. The stable API is exported
+from `equilibrium.solvers` but intentionally not from the root `equilibrium`
+namespace. No material deviations from the decisions in this document were
+required.
+
+Final validation completed with 994 passing tests, full-tree Ruff and Black
+checks, and no dependency-file changes. MyPy was not installed in the active
+development environment, so its optional check was not run.
+
 ## Current repository conventions
 
 Equilibrium currently contains three related but distinct shock conventions:

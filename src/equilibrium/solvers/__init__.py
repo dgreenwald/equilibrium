@@ -17,6 +17,18 @@ from .calibration import (
 )
 from .det_spec import DetSpec
 from .linear_spec import LinearSpec
+from .quadrature import (
+    ExogenousProcess,
+    JaxExogenousProcess,
+    JaxQuadratureRule,
+    QuadratureRule,
+    deterministic_quadrature,
+    exogenous_process_from_model,
+    gauss_hermite_normal,
+    next_exogenous_states_jax,
+    smolyak_gauss_hermite,
+    tensor_gauss_hermite,
+)
 from .results import DeterministicResult, SequenceResult, SeriesTransform
 
 __all__ = [
@@ -32,4 +44,14 @@ __all__ = [
     "ModelParam",
     "ShockParam",
     "RegimeParam",
+    "QuadratureRule",
+    "JaxQuadratureRule",
+    "ExogenousProcess",
+    "JaxExogenousProcess",
+    "deterministic_quadrature",
+    "gauss_hermite_normal",
+    "tensor_gauss_hermite",
+    "smolyak_gauss_hermite",
+    "exogenous_process_from_model",
+    "next_exogenous_states_jax",
 ]

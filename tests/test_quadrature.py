@@ -927,3 +927,25 @@ def test_next_exogenous_states_rejects_invalid_shapes(
 ) -> None:
     with pytest.raises(ValueError, match=message):
         next_exogenous_states_jax(process, current, nodes)
+
+
+def test_phase_two_api_is_exported_from_solvers_only() -> None:
+    import equilibrium
+    import equilibrium.solvers as solvers
+
+    expected = {
+        "QuadratureRule",
+        "JaxQuadratureRule",
+        "ExogenousProcess",
+        "JaxExogenousProcess",
+        "deterministic_quadrature",
+        "gauss_hermite_normal",
+        "tensor_gauss_hermite",
+        "smolyak_gauss_hermite",
+        "exogenous_process_from_model",
+        "next_exogenous_states_jax",
+    }
+
+    assert expected <= set(solvers.__all__)
+    assert all(hasattr(solvers, name) for name in expected)
+    assert all(not hasattr(equilibrium, name) for name in expected)
