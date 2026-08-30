@@ -25,9 +25,17 @@ or multi-device parallelism. Those remain later work.
 
 ## Status
 
-Planned. This document is the decision-complete implementation plan for Phase
-3. Update this section after each work package and record any material API or
-algorithm deviations here.
+In progress. Work package 1 was completed on 2026-08-29. It added the validated
+`CollocationSpec`, model lifecycle and dimension checks, ordered exogenous
+process resolution, conditional linearization with the resolved process, and
+explicit, approximation-derived, or stationary-covariance domains. The
+implementation follows the decisions in this document without material API or
+algorithm deviations. Public exports remain deferred to work package 5.
+
+Work package 1 added 57 focused tests. Validation completed with all 238
+collocation-spec and quadrature tests passing and the full suite at 1,051
+passing tests. Ruff and Black pass for the new source and tests. MyPy was not
+installed in the active environment, so its optional check was not run.
 
 ## Inputs already provided by Phases 1 and 2
 

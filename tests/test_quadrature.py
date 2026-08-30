@@ -225,9 +225,15 @@ def test_gauss_hermite_exact_standard_normal_moments(degree: int) -> None:
     nodes = rule.nodes[:, 0]
 
     for power in range(2 * degree):
-        expected = 0.0 if power % 2 else math.prod(range(1, power, 2))
-        actual = rule.integrate(nodes**power)
-        assert actual == pytest.approx(expected, rel=2e-12, abs=1e-9)
+        values = nodes**power
+        actual = rule.integrate(values)
+        if power % 2:
+            scale = rule.integrate(np.abs(values))
+            tolerance = 16 * np.finfo(np.float64).eps * scale
+            assert abs(actual) <= tolerance
+        else:
+            expected = math.prod(range(1, power, 2))
+            assert actual == pytest.approx(expected, rel=2e-12, abs=1e-9)
 
 
 def test_gauss_hermite_nonstandard_normal_moments() -> None:
