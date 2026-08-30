@@ -429,10 +429,6 @@ class Model:
         # Save the derived_param list before _update_rules() merges and clears it
         self._derived_param_list = list(self.rules["derived_param"].keys())
 
-        # Set up initial guess for steady state
-        self.init_dict = self.params.copy()
-        self.init_dict.update(self.steady_guess)
-
         # Exogenous process parameters
         phi = np.array([self.params["PERS_" + exog] for exog in self.exog_list])
         # sig = np.array([self.params["VOL_" + exog] for exog in self.exog_list])
@@ -443,8 +439,15 @@ class Model:
 
         self.linear_mod = LinearModel(self, Phi=Phi, impact_matrix=impact_matrix)
 
-        # Convert rules to code
+        # Convert rules to code; this also applies variable transformations (e.g.
+        # log_transform) which may rename variables in self.steady_guess.
         self._update_rules()
+
+        # Set up initial guess for steady state after _update_rules() so that
+        # any variable name changes from log_transform (or other transformations)
+        # applied inside _apply_transformations are reflected here.
+        self.init_dict = self.params.copy()
+        self.init_dict.update(self.steady_guess)
         if self.inner_functions is None:
             self._compile_rules()
 

@@ -444,5 +444,152 @@ def test_prefix_generation_from_different_functions():
     assert mod._generate_prefix_from_function("lambda x: x**2") == "lambda_x_x_2"
 
 
+def test_log_transform_with_analytical_steady_solves():
+    """Test that log_transform works end-to-end when the variable has an analytical_steady rule.
+
+    This is a regression test for a bug where Model.log_transform([var]) would
+    fail with a KeyError or incorrect steady-state values when var had an
+    analytical_steady solution, because init_dict was populated before
+    _apply_transformations() ran and thus retained old variable names.
+    """
+    mod = Model()
+
+    mod.params.update(
+        {
+            "alp": 0.6,
+            "bet": 0.95,
+            "delta": 0.1,
+            "gam": 2.0,
+            "Z_bar": 1.0,
+        }
+    )
+
+    mod.steady_guess.update(
+        {
+            "I": 0.5,
+            "K": 6.0,
+        }
+    )
+
+    mod.rules["intermediate"] += [
+        ("K_new", "I + (1.0 - delta) * K"),
+        ("Z", "Z_bar + Z_til"),
+        ("fk", "alp * Z * K ** (alp - 1.0)"),
+        ("y", "Z * K ** alp"),
+        ("c", "y - I"),
+        ("uc", "c ** (-gam)"),
+    ]
+
+    mod.rules["expectations"] += [
+        ("E_Om_K", "bet * (uc_NEXT / uc) * (fk_NEXT + (1.0 - delta))"),
+    ]
+
+    mod.rules["transition"] += [
+        ("K", "K_new"),
+    ]
+
+    mod.rules["optimality"] += [
+        ("I", "E_Om_K - 1.0"),
+    ]
+
+    # K = I/delta in steady state (capital accumulation K_new=K iff I = delta*K)
+    mod.rules["analytical_steady"] += [
+        ("K", "I / delta"),
+    ]
+
+    mod.add_exog("Z_til", pers=0.95, vol=0.1)
+
+    # Apply log transform to the variable that has an analytical_steady rule
+    mod.log_transform(["K"])
+
+    mod.finalize()
+
+    # Verify the rules were correctly transformed
+    assert "log_K" in mod.rules["analytical_steady"]
+    assert "np.log" in mod.rules["analytical_steady"]["log_K"]
+    assert "log_K" in mod.rules["transition"]
+
+    # This should solve without errors (was previously broken due to init_dict bug)
+    mod.solve_steady(calibrate=False, display=False)
+
+    assert mod.res_steady.success
+
+    # Verify steady-state consistency: K_ss = I_ss / delta
+    K_ss = float(np.exp(mod.steady_dict["log_K"]))
+    I_ss = float(mod.steady_dict["I"])
+    delta = mod.params["delta"]
+
+    assert np.isclose(K_ss, I_ss / delta, rtol=1e-6), (
+        f"K_ss={K_ss:.6f} should equal I_ss/delta={I_ss/delta:.6f}"
+    )
+
+
+def test_log_transform_state_var_without_analytical_steady_solves():
+    """Test that log_transform works for a state variable without analytical_steady.
+
+    This ensures the init_dict fix doesn't break the non-analytical case,
+    and that the initial guess is correctly transformed for the solver.
+    """
+    mod = Model()
+
+    mod.params.update(
+        {
+            "alp": 0.6,
+            "bet": 0.95,
+            "delta": 0.1,
+            "gam": 2.0,
+            "Z_bar": 1.0,
+        }
+    )
+
+    mod.steady_guess.update(
+        {
+            "I": 0.5,
+            "K": 6.0,
+        }
+    )
+
+    mod.rules["intermediate"] += [
+        ("K_new", "I + (1.0 - delta) * K"),
+        ("Z", "Z_bar + Z_til"),
+        ("fk", "alp * Z * K ** (alp - 1.0)"),
+        ("y", "Z * K ** alp"),
+        ("c", "y - I"),
+        ("uc", "c ** (-gam)"),
+    ]
+
+    mod.rules["expectations"] += [
+        ("E_Om_K", "bet * (uc_NEXT / uc) * (fk_NEXT + (1.0 - delta))"),
+    ]
+
+    mod.rules["transition"] += [
+        ("K", "K_new"),
+    ]
+
+    mod.rules["optimality"] += [
+        ("I", "E_Om_K - 1.0"),
+    ]
+
+    # No analytical_steady - solver must find log_K numerically
+    mod.add_exog("Z_til", pers=0.95, vol=0.1)
+
+    mod.log_transform(["K"])
+    mod.finalize()
+
+    # init_dict should have log_K (transformed), not K (old name)
+    assert "log_K" in mod.init_dict
+    assert "K" not in mod.init_dict
+
+    mod.solve_steady(calibrate=False, display=False)
+
+    assert mod.res_steady.success
+
+    K_ss = float(np.exp(mod.steady_dict["log_K"]))
+    I_ss = float(mod.steady_dict["I"])
+    delta = mod.params["delta"]
+
+    assert np.isclose(K_ss, I_ss / delta, rtol=1e-6)
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
