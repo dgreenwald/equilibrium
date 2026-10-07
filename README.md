@@ -274,6 +274,26 @@ result = calibrate(
 print(f"Calibrated beta: {result.parameters['bet']}")
 ```
 
+Use `method="trf"` for bounded trust-region least squares, available in both
+`calibrate()` and `calibrate_custom()`:
+
+```python
+result = calibrate(
+    model=model,
+    spec=det_spec,
+    targets=targets,
+    calib_params=params_to_calibrate,  # Uses each parameter's bounds
+    method="trf",
+    tol=1e-8,
+    maxiter=200,
+)
+```
+
+For this method, `tol` controls cost, step, and gradient convergence, and
+`maxiter` limits function evaluations excluding numerical-Jacobian evaluations.
+Exactly identified problems must also meet the calibration residual tolerance.
+Over-identified problems minimize weighted squared errors.
+
 #### Saving and Loading Calibrated Parameters
 
 Persist calibrated parameters for reuse across sessions:

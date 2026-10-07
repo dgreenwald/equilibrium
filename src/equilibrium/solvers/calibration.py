@@ -320,7 +320,8 @@ class CalibrationResult:
     residual : float
         Final residual norm.
     iterations : int
-        Number of iterations taken.
+        Number of iterations or solver-reported function evaluations taken.
+        For least squares, excludes numerical-Jacobian evaluations.
     message : str
         Solver message.
     solution : Union[DeterministicResult, IrfResult, SequenceResult]
@@ -328,7 +329,8 @@ class CalibrationResult:
     model : object
         The final model instance with fitted parameters.
     method : str
-        Calibration method used ('root_scalar', 'root', 'minimize', 'minimize_scalar').
+        Calibration method used ('root_scalar', 'root', 'newton', 'minimize',
+        'minimize_scalar', or 'least_squares').
     """
 
     parameters: Dict[str, float] = field(default_factory=dict)
@@ -828,7 +830,18 @@ def _run_calibration_loop(
         return _solve_and_evaluate(params, return_weights=True)
 
     # Select and run optimization method
-    if is_just_identified:
+    if method == "trf":
+
+        def residual_vector(params: np.ndarray) -> np.ndarray:
+            if is_just_identified:
+                return np.atleast_1d(np.asarray(objective(params), dtype=float))
+            errors, weights = objective_with_weights(params)
+            return np.sqrt(weights) * np.asarray(errors, dtype=float)
+
+        result = _solve_least_squares(
+            residual_vector, initial_params, bounds, tol, maxiter
+        )
+    elif is_just_identified:
         if is_scalar:
             result = _solve_scalar_root(
                 objective, initial_params[0], bounds, method, tol, maxiter
@@ -960,11 +973,14 @@ def calibrate(
         Parameter bounds. If None, uses bounds from ``calib_params``.
     method : str, optional
         Optimization method. If None, automatically selected based on problem
-        structure.
+        structure. Set "trf" for bounded trust-region least squares with a
+        numerical Jacobian, for scalar or vector parameters. Target weights
+        apply only to over-identified problems, as with existing methods.
     tol : float, default 1e-6
-        Convergence tolerance.
+        Convergence tolerance. For "trf", sets ftol, xtol, and gtol.
     maxiter : int, default 100
-        Maximum number of iterations.
+        Maximum number of iterations. For "trf", sets max_nfev (function
+        evaluations excluding numerical-Jacobian evaluations).
     suppress_solver_output : bool, default True
         If True, suppress logging from steady-state, deterministic, and linear
         solvers during calibration evaluations.
@@ -998,8 +1014,11 @@ def calibrate(
     load_label : str, optional
         Label to load saved parameters from when ``initialize_from_saved=True``.
         Falls back to ``label`` if not provided.
+    gradient_kwargs : dict, optional
+        Numerical-gradient options for method="newton" only; unused by "trf".
     **solver_kwargs
-        Additional keyword arguments passed to the solver.
+        Additional keyword arguments passed to the model solution solver,
+        not the calibration optimizer.
 
     Returns
     -------
@@ -1251,11 +1270,14 @@ def calibrate_custom(
         ``series_transforms``.
     method : str, optional
         Optimization method.  If None, automatically selected based on problem
-        structure.
+        structure. Set "trf" for bounded trust-region least squares with a
+        numerical Jacobian, for scalar or vector parameters. Target weights
+        apply only to over-identified problems, as with existing methods.
     tol : float, default 1e-6
-        Convergence tolerance.
+        Convergence tolerance. For "trf", sets ftol, xtol, and gtol.
     maxiter : int, default 100
-        Maximum number of iterations.
+        Maximum number of iterations. For "trf", sets max_nfev (function
+        evaluations excluding numerical-Jacobian evaluations).
     return_solution : bool, default False
         If True, return the (transformed) solution and model in the result.
     progress_every : int, default 1
@@ -1273,6 +1295,8 @@ def calibrate_custom(
     load_label : str, optional
         Label to load saved parameters from.  Falls back to ``label`` if not
         provided.
+    gradient_kwargs : dict, optional
+        Numerical-gradient options for method="newton" only; unused by "trf".
 
     Returns
     -------
@@ -1528,6 +1552,47 @@ def _compute_irf_from_linear_model(
         )
 
     return irf_result
+
+
+def _solve_least_squares(
+    func: Callable[[np.ndarray], np.ndarray],
+    x0: np.ndarray,
+    bounds: Optional[List[tuple]],
+    tol: float,
+    maxiter: int,
+) -> CalibrationResult:
+    """Solve a bounded residual problem using trust-region reflective steps."""
+    x0 = np.asarray(x0, dtype=float)
+    try:
+        ls_bounds = (-np.inf, np.inf) if bounds is None else np.asarray(bounds).T
+        sol = opt.least_squares(
+            func,
+            x0,
+            method="trf",
+            bounds=ls_bounds,
+            ftol=tol,
+            xtol=tol,
+            gtol=tol,
+            max_nfev=maxiter,
+        )
+        return CalibrationResult(
+            parameters={f"param_{i}": float(val) for i, val in enumerate(sol.x)},
+            parameters_array=sol.x,
+            success=sol.success,
+            residual=float(np.linalg.norm(sol.fun)),
+            iterations=sol.nfev,
+            message=sol.message,
+            method="least_squares",
+        )
+    except Exception as e:
+        logger.error("Trust-region least squares failed: %s", str(e))
+        return CalibrationResult(
+            parameters={f"param_{i}": float(val) for i, val in enumerate(x0)},
+            parameters_array=x0,
+            success=False,
+            message=str(e),
+            method="least_squares",
+        )
 
 
 def _solve_scalar_root(
