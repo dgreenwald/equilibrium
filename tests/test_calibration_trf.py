@@ -145,3 +145,56 @@ def test_trf_unsuccessful_result_is_not_saved(run_calibration, tmp_path):
             FunctionalTarget(lambda x: 1.0), label="failed", save_dir=tmp_path
         )
     assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize("method", ["trf", "Nelder-Mead"])
+def test_public_optimizer_options(run_calibration, method):
+    options = (
+        {"max_nfev": 500, "x_scale": "jac"}
+        if method == "trf"
+        else {"maxiter": 500, "adaptive": True, "xatol": 1e-9}
+    )
+    result = run_calibration(
+        FunctionalTarget(lambda x: [x[0] - 1, x[1] - 2, x[0] + x[1] - 3]),
+        n=2,
+        method=method,
+        maxiter=1,
+        optimizer_options=options,
+    )
+    assert result.success, result.message
+    np.testing.assert_allclose(result.parameters_array, [1, 2], atol=1e-6)
+
+
+@pytest.mark.parametrize(
+    "options,exception",
+    [
+        ([], TypeError),
+        ({"gradient_kwargs": []}, TypeError),
+        *[
+            ({key: None}, ValueError)
+            for key in (
+                "fun",
+                "f",
+                "x0",
+                "x1",
+                "args",
+                "kwargs",
+                "method",
+                "bounds",
+                "bracket",
+                "options",
+            )
+        ],
+    ],
+)
+def test_public_invalid_optimizer_options(run_calibration, options, exception):
+    with pytest.raises(exception, match="optimizer_options"):
+        run_calibration(FunctionalTarget(lambda x: x - 1), optimizer_options=options)
+
+
+def test_optimizer_tolerance_does_not_relax_acceptance(run_calibration):
+    result = run_calibration(
+        FunctionalTarget(lambda x: 1.0), optimizer_options={"gtol": 0.1}
+    )
+    assert not result.success
+    assert "exceeds tolerance" in result.message

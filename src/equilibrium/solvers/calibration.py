@@ -612,6 +612,43 @@ def _build_model_updater(
 # ---------------------------------------------------------------------------
 
 
+def _validate_optimizer_options(
+    options: Optional[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Copy flat tuning options and protect calibration-owned inputs."""
+    if options is None:
+        return {}
+    if not isinstance(options, Mapping):
+        raise TypeError("optimizer_options must be a mapping or None")
+    reserved = {
+        "fun",
+        "f",
+        "x0",
+        "x1",
+        "args",
+        "kwargs",
+        "method",
+        "bounds",
+        "bracket",
+        "options",
+    }
+    conflicts = reserved.intersection(options)
+    if conflicts:
+        raise ValueError(
+            "optimizer_options cannot override calibration inputs or contain "
+            f"nested options: {', '.join(sorted(conflicts))}"
+        )
+    copied = dict(options)
+    if "gradient_kwargs" in copied:
+        gradients = copied["gradient_kwargs"]
+        if gradients is not None and not isinstance(gradients, Mapping):
+            raise TypeError(
+                "optimizer_options['gradient_kwargs'] must be a mapping or None"
+            )
+        copied["gradient_kwargs"] = dict(gradients or {})
+    return copied
+
+
 def _run_calibration_loop(
     solution_fn: Callable,
     initial_params: np.ndarray,
@@ -633,6 +670,7 @@ def _run_calibration_loop(
     initialize_from_saved: bool,
     load_label: Optional[str],
     gradient_kwargs: Optional[dict] = None,
+    optimizer_options: Optional[Mapping[str, Any]] = None,
 ) -> CalibrationResult:
     """
     Run the calibration optimization loop given a solution function.
@@ -652,6 +690,8 @@ def _run_calibration_loop(
     targets : list of PointTarget or FunctionalTarget
         Target specifications to match.
     """
+    optimizer_options = _validate_optimizer_options(optimizer_options)
+
     # Warm start: override initial values from a previously saved calibration
     if initialize_from_saved:
         _effective_load_label = load_label or label
@@ -839,16 +879,28 @@ def _run_calibration_loop(
             return np.sqrt(weights) * np.asarray(errors, dtype=float)
 
         result = _solve_least_squares(
-            residual_vector, initial_params, bounds, tol, maxiter
+            residual_vector, initial_params, bounds, tol, maxiter, optimizer_options
         )
     elif is_just_identified:
         if is_scalar:
             result = _solve_scalar_root(
-                objective, initial_params[0], bounds, method, tol, maxiter
+                objective,
+                initial_params[0],
+                bounds,
+                method,
+                tol,
+                maxiter,
+                optimizer_options,
             )
         else:
             result = _solve_vector_root(
-                objective, initial_params, method, tol, maxiter, gradient_kwargs
+                objective,
+                initial_params,
+                method,
+                tol,
+                maxiter,
+                gradient_kwargs,
+                optimizer_options,
             )
     else:
         if is_scalar:
@@ -859,6 +911,7 @@ def _run_calibration_loop(
                 method,
                 tol,
                 maxiter,
+                optimizer_options,
             )
         else:
             result = _solve_vector_minimize(
@@ -868,6 +921,7 @@ def _run_calibration_loop(
                 method,
                 tol,
                 maxiter,
+                optimizer_options,
             )
 
     # Post-process: replace generic param names with descriptive names
@@ -939,6 +993,7 @@ def calibrate(
     initialize_from_saved: bool = False,
     load_label: Optional[str] = None,
     gradient_kwargs: Optional[dict] = None,
+    optimizer_options: Optional[Mapping[str, Any]] = None,
     **solver_kwargs,
 ) -> CalibrationResult:
     """
@@ -1015,7 +1070,23 @@ def calibrate(
         Label to load saved parameters from when ``initialize_from_saved=True``.
         Falls back to ``label`` if not provided.
     gradient_kwargs : dict, optional
-        Numerical-gradient options for method="newton" only; unused by "trf".
+        Legacy numerical-gradient options for method="newton" only. Prefer
+        optimizer_options["gradient_kwargs"]. When both are supplied, their
+        entries are merged and optimizer_options takes precedence.
+    optimizer_options : Mapping[str, Any], optional
+        Flat, backend-specific tuning options. Passed through SciPy's options
+        dictionaries for minimize, minimize_scalar, and root; root_scalar uses
+        direct xtol/rtol/maxiter arguments and options for remaining entries.
+        For "trf" and the custom Newton solver, passed as keyword arguments.
+        Explicit entries override defaults derived from tol and maxiter;
+        the final calibration residual check still uses the public tol.
+        Use native names, e.g. {"adaptive": True} for Nelder-Mead,
+        {"x_scale": "jac", "max_nfev": 500} for TRF, or
+        {"max_iterations": 200, "gradient_kwargs": {...}} for Newton.
+        Calibration-owned inputs (objective, initial values, method, bounds,
+        args/kwargs) and nested "options" are not accepted. Caller mappings
+        are not modified. Backend-specific invalid options retain the
+        backend's warnings or existing failed-result handling.
     **solver_kwargs
         Additional keyword arguments passed to the model solution solver,
         not the calibration optimizer.
@@ -1193,6 +1264,7 @@ def calibrate(
         initialize_from_saved=initialize_from_saved,
         load_label=load_label,
         gradient_kwargs=gradient_kwargs,
+        optimizer_options=optimizer_options,
     )
 
 
@@ -1220,6 +1292,7 @@ def calibrate_custom(
     initialize_from_saved: bool = False,
     load_label: Optional[str] = None,
     gradient_kwargs: Optional[dict] = None,
+    optimizer_options: Optional[Mapping[str, Any]] = None,
 ) -> CalibrationResult:
     """
     Calibrate model parameters using a caller-supplied solution builder.
@@ -1296,7 +1369,23 @@ def calibrate_custom(
         Label to load saved parameters from.  Falls back to ``label`` if not
         provided.
     gradient_kwargs : dict, optional
-        Numerical-gradient options for method="newton" only; unused by "trf".
+        Legacy numerical-gradient options for method="newton" only. Prefer
+        optimizer_options["gradient_kwargs"]. When both are supplied, their
+        entries are merged and optimizer_options takes precedence.
+    optimizer_options : Mapping[str, Any], optional
+        Flat, backend-specific tuning options. Passed through SciPy's options
+        dictionaries for minimize, minimize_scalar, and root; root_scalar uses
+        direct xtol/rtol/maxiter arguments and options for remaining entries.
+        For "trf" and the custom Newton solver, passed as keyword arguments.
+        Explicit entries override defaults derived from tol and maxiter;
+        the final calibration residual check still uses the public tol.
+        Use native names, e.g. {"adaptive": True} for Nelder-Mead,
+        {"x_scale": "jac", "max_nfev": 500} for TRF, or
+        {"max_iterations": 200, "gradient_kwargs": {...}} for Newton.
+        Calibration-owned inputs (objective, initial values, method, bounds,
+        args/kwargs) and nested "options" are not accepted. Caller mappings
+        are not modified. Backend-specific invalid options retain the
+        backend's warnings or existing failed-result handling.
 
     Returns
     -------
@@ -1370,6 +1459,7 @@ def calibrate_custom(
         initialize_from_saved=initialize_from_saved,
         load_label=load_label,
         gradient_kwargs=gradient_kwargs,
+        optimizer_options=optimizer_options,
     )
 
 
@@ -1560,6 +1650,7 @@ def _solve_least_squares(
     bounds: Optional[List[tuple]],
     tol: float,
     maxiter: int,
+    optimizer_options: Optional[Mapping[str, Any]] = None,
 ) -> CalibrationResult:
     """Solve a bounded residual problem using trust-region reflective steps."""
     x0 = np.asarray(x0, dtype=float)
@@ -1570,10 +1661,13 @@ def _solve_least_squares(
             x0,
             method="trf",
             bounds=ls_bounds,
-            ftol=tol,
-            xtol=tol,
-            gtol=tol,
-            max_nfev=maxiter,
+            **{
+                "ftol": tol,
+                "xtol": tol,
+                "gtol": tol,
+                "max_nfev": maxiter,
+                **(optimizer_options or {}),
+            },
         )
         return CalibrationResult(
             parameters={f"param_{i}": float(val) for i, val in enumerate(sol.x)},
@@ -1602,6 +1696,7 @@ def _solve_scalar_root(
     method: Optional[str],
     tol: float,
     maxiter: int,
+    optimizer_options: Optional[Mapping[str, Any]] = None,
 ) -> CalibrationResult:
     """Solve scalar root-finding problem."""
     # Set up bounds
@@ -1615,6 +1710,12 @@ def _solve_scalar_root(
     if method is None:
         method = "brentq"  # Robust bracketing method
 
+    scalar_options = dict(optimizer_options or {})
+    root_kwargs = {"xtol": tol, "maxiter": maxiter}
+    for key in ("xtol", "rtol", "maxiter"):
+        if key in scalar_options:
+            root_kwargs[key] = scalar_options.pop(key)
+
     def _call_root_scalar(selected_method: str):
         if selected_method == "secant":
             x1 = bracket[1] if x0 != bracket[1] else bracket[0]
@@ -1623,16 +1724,16 @@ def _solve_scalar_root(
                 method=selected_method,
                 x0=x0,
                 x1=x1,
-                xtol=tol,
-                maxiter=maxiter,
+                **root_kwargs,
+                options=scalar_options.copy(),
             )
 
         return opt.root_scalar(
             func,
             method=selected_method,
             bracket=bracket,
-            xtol=tol,
-            maxiter=maxiter,
+            **root_kwargs,
+            options=scalar_options.copy(),
         )
 
     def _safe_residual(x):
@@ -1704,7 +1805,7 @@ def _solve_scalar_root(
         )
 
 
-_ROOT_MAXFEV_METHODS = {"hybr", "lm"}
+_ROOT_MAXFEV_METHODS = {"hybr"}
 
 
 def _solve_vector_root(
@@ -1714,6 +1815,7 @@ def _solve_vector_root(
     tol: float,
     maxiter: int,
     gradient_kwargs: Optional[dict] = None,
+    optimizer_options: Optional[Mapping[str, Any]] = None,
 ) -> CalibrationResult:
     """Solve vector root-finding problem."""
     if method is None:
@@ -1723,13 +1825,20 @@ def _solve_vector_root(
         from . import newton
 
         try:
+            newton_options = {
+                "tol": tol,
+                "max_iterations": maxiter,
+                "verbose": False,
+                **(optimizer_options or {}),
+            }
+            newton_options["gradient_kwargs"] = {
+                **(gradient_kwargs or {}),
+                **(newton_options.get("gradient_kwargs") or {}),
+            }
             sol = newton.root(
                 func,
                 x0,
-                tol=tol,
-                max_iterations=maxiter,
-                verbose=False,
-                gradient_kwargs=gradient_kwargs or {},
+                **newton_options,
             )
             params = {f"param_{i}": val for i, val in enumerate(sol.x)}
             return CalibrationResult(
@@ -1751,7 +1860,7 @@ def _solve_vector_root(
                 method="newton",
             )
 
-    # hybr and lm are MINPACK wrappers that use maxfev, not maxiter
+    # Only hybr uses maxfev; the lm wrapper accepts maxiter.
     iter_key = "maxfev" if method in _ROOT_MAXFEV_METHODS else "maxiter"
 
     try:
@@ -1760,7 +1869,7 @@ def _solve_vector_root(
             x0,
             method=method,
             tol=tol,
-            options={iter_key: maxiter},
+            options={iter_key: maxiter, **(optimizer_options or {})},
         )
 
         # Build parameter dict
@@ -1798,6 +1907,7 @@ def _solve_scalar_minimize(
     method: Optional[str],
     tol: float,
     maxiter: int,
+    optimizer_options: Optional[Mapping[str, Any]] = None,
 ) -> CalibrationResult:
     """Solve scalar minimization problem with weighted objectives."""
 
@@ -1823,7 +1933,7 @@ def _solve_scalar_minimize(
             objective_squared,
             method=method,
             bounds=bracket,
-            options={"xatol": tol, "maxiter": maxiter},
+            options={"xatol": tol, "maxiter": maxiter, **(optimizer_options or {})},
         )
 
         return CalibrationResult(
@@ -1854,6 +1964,7 @@ def _solve_vector_minimize(
     method: Optional[str],
     tol: float,
     maxiter: int,
+    optimizer_options: Optional[Mapping[str, Any]] = None,
 ) -> CalibrationResult:
     """Solve vector minimization problem with weighted objectives."""
 
@@ -1875,7 +1986,7 @@ def _solve_vector_minimize(
             method=method,
             bounds=bounds,
             tol=tol,
-            options={"maxiter": maxiter},
+            options={"maxiter": maxiter, **(optimizer_options or {})},
         )
 
         # Build parameter dict

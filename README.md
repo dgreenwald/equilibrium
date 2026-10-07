@@ -294,6 +294,41 @@ For this method, `tol` controls cost, step, and gradient convergence, and
 Exactly identified problems must also meet the calibration residual tolerance.
 Over-identified problems minimize weighted squared errors.
 
+Both calibration APIs accept flat, backend-specific `optimizer_options`:
+
+```python
+# Multiple parameters with more target values than parameters
+result = calibrate(
+    model=model,
+    spec=det_spec,
+    targets=overidentified_targets,
+    calib_params=params_to_calibrate,
+    method="Nelder-Mead",
+    optimizer_options={"adaptive": True, "xatol": 1e-8, "maxiter": 500},
+)
+
+# Other examples of optimizer_options:
+trf_options = {"x_scale": "jac", "max_nfev": 500}
+newton_options = {
+    "max_backstep_iterations": 30,
+    "gradient_kwargs": existing_gradient_options,
+}
+```
+
+Options go into SciPy's `options` dictionary for `minimize`, `minimize_scalar`,
+and `root`. For `root_scalar`, `xtol`, `rtol`, and `maxiter` are direct arguments;
+remaining settings go into `options`. TRF and the custom Newton solver receive
+options as keyword arguments. Use each backend's native option names without
+nesting another `options` dictionary. Explicit settings override defaults derived
+from `tol` and `maxiter`; the final calibration residual check still uses `tol`.
+Options cannot replace the objective, initial values, method, bounds, or objective
+arguments. Caller dictionaries are not modified.
+
+The existing `gradient_kwargs` argument remains supported for Newton. Prefer
+`optimizer_options["gradient_kwargs"]`; if both are supplied, their entries are
+merged with the new form taking precedence. Extra `**solver_kwargs` continue to
+configure the model solution solver, independently of optimizer tuning.
+
 #### Saving and Loading Calibrated Parameters
 
 Persist calibrated parameters for reuse across sessions:
