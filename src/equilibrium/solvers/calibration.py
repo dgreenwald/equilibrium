@@ -20,8 +20,20 @@ import copy
 import logging
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from itertools import chain, product
+from math import prod
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Mapping, Optional, Union
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    List,
+    Mapping,
+    Optional,
+    Sequence,
+    Union,
+)
 
 import numpy as np
 import scipy.optimize as opt
@@ -35,6 +47,13 @@ from .results import (
     SequenceResult,
     SeriesTransform,
 )
+
+GridSearch = Union[
+    int,
+    Mapping[str, Union[int, Sequence[float]]],
+    Sequence[Sequence[float]],
+    np.ndarray,
+]
 
 logger = logging.getLogger(__name__)
 
@@ -305,6 +324,22 @@ class RegimeParam:
 
 
 @dataclass
+class GridSearchResult:
+    """Grid diagnostics; arrays use ``CalibrationResult.parameters_array`` order.
+
+    ``best_score`` is the squared residual score before optimization.
+    ``evaluations`` includes the baseline and failed attempts; ``failures`` counts
+    invalid candidates. The baseline is the original or saved initial guess.
+    """
+
+    initial_params: np.ndarray
+    best_params: np.ndarray
+    best_score: float
+    evaluations: int
+    failures: int
+
+
+@dataclass
 class CalibrationResult:
     """
     Container for calibration results.
@@ -328,6 +363,8 @@ class CalibrationResult:
         The solved path/IRF using the fitted parameters.
     model : object
         The final model instance with fitted parameters.
+    grid_search : GridSearchResult | None
+        Initial grid diagnostics, or None when grid search was disabled.
     method : str
         Calibration method used ('root_scalar', 'root', 'newton', 'minimize',
         'minimize_scalar', or 'least_squares').
@@ -342,6 +379,8 @@ class CalibrationResult:
     solution: Optional[Union[DeterministicResult, IrfResult, SequenceResult]] = None
     model: Optional[Any] = None
     method: str = ""
+
+    grid_search: Optional[GridSearchResult] = None
 
     def save(self, label: str, save_dir: Optional[Union[Path, str]] = None) -> Any:
         """
@@ -649,6 +688,154 @@ def _validate_optimizer_options(
     return copied
 
 
+def _prepare_grid(
+    grid: GridSearch,
+    initial: np.ndarray,
+    bounds: list[tuple],
+    names: list[str],
+    column_order: Optional[list[int]],
+) -> tuple[Iterable[tuple[float, ...]], int]:
+    """Validate and normalize candidates without materializing Cartesian grids."""
+    limits = np.asarray(bounds, dtype=float)
+    if limits.shape != (len(initial), 2) or np.any(np.isnan(limits)):
+        raise ValueError("grid_search requires one valid bounds pair per parameter")
+    if np.any(limits[:, 0] > limits[:, 1]):
+        raise ValueError("grid_search bounds must be ordered lower <= upper")
+
+    def axis_values(
+        values: Union[int, Sequence[float]], index: int
+    ) -> tuple[float, ...]:
+        lo, hi = limits[index]
+        if isinstance(values, (int, np.integer)) and not isinstance(values, bool):
+            if values < 2 or not np.isfinite([lo, hi]).all():
+                raise ValueError("Grid counts must be >= 2 and require finite bounds")
+            values = np.linspace(lo, hi, int(values))
+        else:
+            values = np.asarray(values, dtype=float)
+        if np.ndim(values) != 1 or len(values) == 0:
+            raise ValueError("Grid axes must be nonempty one-dimensional sequences")
+        if not np.isfinite(values).all() or np.any(values < lo) or np.any(values > hi):
+            raise ValueError("Grid values must be finite and within effective bounds")
+        return tuple(dict.fromkeys(float(v) for v in values))
+
+    if isinstance(grid, (int, np.integer)) and not isinstance(grid, bool):
+        axes = [axis_values(grid, i) for i in range(len(initial))]
+    elif isinstance(grid, Mapping):
+        if not grid:
+            raise ValueError("grid_search mapping must not be empty")
+        for name in grid:
+            if names.count(name) != 1:
+                raise ValueError(f"Unknown or ambiguous grid parameter name: {name!r}")
+        axes = [
+            axis_values(grid[name], i) if name in grid else (float(initial[i]),)
+            for i, name in enumerate(names)
+        ]
+    else:
+        try:
+            rows = np.asarray(grid, dtype=float)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "Explicit grid candidates must be a rectangular 2D array"
+            ) from exc
+        if rows.ndim != 2 or rows.shape[0] == 0 or rows.shape[1] != len(initial):
+            raise ValueError(
+                "Explicit grid candidates must have shape (n_candidates, n_params), with n_candidates > 0"
+            )
+        if column_order is not None:
+            rows = rows[:, column_order]
+        if (
+            not np.isfinite(rows).all()
+            or np.any(rows < limits[:, 0])
+            or np.any(rows > limits[:, 1])
+        ):
+            raise ValueError("Grid values must be finite and within effective bounds")
+        unique = dict.fromkeys(map(tuple, rows))
+        return iter(unique), len(unique)
+    return product(*axes), prod(map(len, axes))
+
+
+def _search_grid(
+    candidates: Iterable[tuple[float, ...]],
+    count: int,
+    initial: np.ndarray,
+    bounds: list[tuple],
+    evaluate: Callable,
+    method: Optional[str],
+    progress_every: int,
+) -> tuple[GridSearchResult, int]:
+    """Compare the baseline and grid using valid residual evaluations only."""
+    baseline = np.asarray(initial, dtype=float).copy()
+    limits = np.asarray(bounds, dtype=float)
+    best = None
+    best_score = np.inf
+    n_targets = None
+    evaluations = failures = 0
+    logger.info(
+        "Grid search: %d candidates plus the initial guess (if distinct).", count
+    )
+    for index, row in enumerate(chain([baseline], candidates)):
+        params = np.asarray(row, dtype=float)
+        if index and np.array_equal(params, baseline):
+            continue
+        evaluations += 1
+        try:
+            if (
+                not np.isfinite(params).all()
+                or np.any(params < limits[:, 0])
+                or np.any(params > limits[:, 1])
+            ):
+                raise ValueError("candidate is nonfinite or outside bounds")
+            errors, weights, _ = evaluate(params)
+            errors = np.asarray(errors, dtype=float)
+            weights = np.asarray(weights, dtype=float)
+            if (
+                errors.ndim != 1
+                or errors.size == 0
+                or weights.shape != errors.shape
+                or not np.isfinite(errors).all()
+                or not np.isfinite(weights).all()
+            ):
+                raise ValueError("candidate has invalid residuals or weights")
+            weighted = len(errors) != len(initial) or (
+                method is not None and method.lower() == "nelder-mead"
+            )
+            with np.errstate(over="ignore", invalid="ignore"):
+                score = float(
+                    np.sum(errors**2 * weights) if weighted else np.sum(errors**2)
+                )
+            if not np.isfinite(score):
+                raise ValueError("candidate has a nonfinite score")
+        except Exception as exc:
+            failures += 1
+            logger.debug("Grid candidate %d failed: %s", evaluations, exc)
+        else:
+            if n_targets is None:
+                n_targets = len(errors)
+            elif len(errors) != n_targets:
+                raise ValueError(
+                    "Inconsistent target dimensionality across grid candidates"
+                )
+            if score < best_score:
+                best, best_score = params.copy(), score
+        if progress_every and evaluations % progress_every == 0:
+            logger.info(
+                "Grid search eval %d: failures=%d best_score=%g",
+                evaluations,
+                failures,
+                best_score,
+            )
+    if best is None:
+        raise RuntimeError(
+            f"Grid search failed: all {evaluations} candidates were invalid"
+        )
+    assert n_targets is not None
+    logger.info("Grid search selected params=%s score=%g", best, best_score)
+    return (
+        GridSearchResult(baseline, best, best_score, evaluations, failures),
+        n_targets,
+    )
+
+
 def _run_calibration_loop(
     solution_fn: Callable,
     initial_params: np.ndarray,
@@ -671,6 +858,8 @@ def _run_calibration_loop(
     load_label: Optional[str],
     gradient_kwargs: Optional[dict] = None,
     optimizer_options: Optional[Mapping[str, Any]] = None,
+    grid_search: Optional[GridSearch] = None,
+    grid_column_order: Optional[list[int]] = None,
 ) -> CalibrationResult:
     """
     Run the calibration optimization loop given a solution function.
@@ -691,6 +880,8 @@ def _run_calibration_loop(
         Target specifications to match.
     """
     optimizer_options = _validate_optimizer_options(optimizer_options)
+    if grid_search is not None:
+        initial_params = np.asarray(initial_params, dtype=float).copy()
 
     # Warm start: override initial values from a previously saved calibration
     if initialize_from_saved:
@@ -733,6 +924,10 @@ def _run_calibration_loop(
             default_transform=default_transform,
         )
 
+    def _evaluate_candidate(params):
+        solution, _ = solution_fn(params)
+        return _evaluate_targets(targets, _apply_transforms(solution))
+
     # Conservative pre-check before test evaluation
     min_targets = sum(
         1 for t in targets if isinstance(t, (PointTarget, FunctionalTarget))
@@ -745,19 +940,47 @@ def _run_calibration_loop(
             f"but only {min_targets} targets. Add more targets or reduce parameters."
         )
 
-    # Test evaluation to determine actual n_targets
-    try:
-        test_solution, _ = solution_fn(initial_params)
-        test_solution = _apply_transforms(test_solution)
-        test_errors, _, _ = _evaluate_targets(targets, test_solution)
-        n_targets = len(test_errors)
-    except Exception as e:
-        logger.warning(
-            "Could not determine target dimensionality from test evaluation: "
-            "%s. Assuming minimal targets.",
-            str(e),
+    grid_result = None
+    if grid_search is not None:
+        if (
+            is_scalar
+            and method not in ("trf", "secant")
+            and (method is None or method.lower() != "nelder-mead")
+        ):
+            raise ValueError(
+                "grid_search requires a scalar method that accepts an initial "
+                "guess: use 'trf', 'Nelder-Mead', or 'secant' for a "
+                "just-identified problem."
+            )
+        candidates, count = _prepare_grid(
+            grid_search, initial_params, bounds, param_names, grid_column_order
         )
-        n_targets = min_targets
+        grid_result, n_targets = _search_grid(
+            candidates,
+            count,
+            initial_params,
+            bounds,
+            _evaluate_candidate,
+            method,
+            progress_every,
+        )
+        initial_params = grid_result.best_params.copy()
+        if is_scalar and method == "secant" and n_targets != 1:
+            raise ValueError(
+                "grid_search with 'secant' requires one target value; use 'trf' or 'Nelder-Mead'."
+            )
+    else:
+        # Preserve dimensionality discovery and fallback when grid search is off.
+        try:
+            test_errors, _, _ = _evaluate_candidate(initial_params)
+            n_targets = len(test_errors)
+        except Exception as e:
+            logger.warning(
+                "Could not determine target dimensionality from test evaluation: "
+                "%s. Assuming minimal targets.",
+                str(e),
+            )
+            n_targets = min_targets
 
     if n_params > n_targets:
         raise ValueError(
@@ -792,9 +1015,7 @@ def _run_calibration_loop(
                         return np.full(n_targets, 1e10)
 
         try:
-            solution, _ = solution_fn(params)
-            transformed = _apply_transforms(solution)
-            errors, target_weights, details = _evaluate_targets(targets, transformed)
+            errors, target_weights, details = _evaluate_candidate(params)
 
             nonlocal eval_count
             eval_count += 1
@@ -935,6 +1156,8 @@ def _run_calibration_loop(
                 optimizer_options,
             )
 
+    result.grid_search = grid_result
+
     # Post-process: replace generic param names with descriptive names
     result.parameters = {
         name: float(val) for name, val in zip(param_names, result.parameters_array)
@@ -1005,6 +1228,7 @@ def calibrate(
     load_label: Optional[str] = None,
     gradient_kwargs: Optional[dict] = None,
     optimizer_options: Optional[Mapping[str, Any]] = None,
+    grid_search: Optional[GridSearch] = None,
     **solver_kwargs,
 ) -> CalibrationResult:
     """
@@ -1084,6 +1308,23 @@ def calibrate(
         Legacy numerical-gradient options for method="newton" only. Prefer
         optimizer_options["gradient_kwargs"]. When both are supplied, their
         entries are merged and optimizer_options takes precedence.
+    grid_search : int, mapping, sequence of rows, ndarray, or None
+        Optional initial search. An integer >= 2 generates that many evenly
+        spaced values per parameter over finite effective bounds. A mapping
+        uses result parameter names and supplies counts or explicit 1D axes;
+        omitted parameters retain their initial guesses during the search.
+        These forms take a Cartesian product. Alternatively, a nonempty 2D
+        array or list of tuples supplies exact candidates, with columns in
+        caller-supplied calib_params order (all parameters required).
+        Values must be finite and within effective bounds. The original or
+        saved initial guess is also considered; ties prefer it, then the first
+        best candidate. Failed/nonfinite evaluations are skipped; all failing
+        raises RuntimeError. Search is sequential and Cartesian cost grows
+        multiplicatively. Scalar problems require method='trf', 'Nelder-Mead',
+        or 'secant' (one target only). Scores use the optimizer's standard
+        squared residual weighting, without backend-specific robust losses.
+        Diagnostics are returned in result.grid_search; their arrays follow
+        result.parameters_array order (model, regime, then shock parameters).
     optimizer_options : Mapping[str, Any], optional
         Flat, backend-specific tuning options. Passed through SciPy's options
         dictionaries for minimize, minimize_scalar, and root; root_scalar uses
@@ -1276,6 +1517,13 @@ def calibrate(
         load_label=load_label,
         gradient_kwargs=gradient_kwargs,
         optimizer_options=optimizer_options,
+        grid_search=grid_search,
+        grid_column_order=[
+            i
+            for param_type in (ModelParam, RegimeParam, ShockParam)
+            for i, param in enumerate(calib_params)
+            if isinstance(param, param_type)
+        ],
     )
 
 
@@ -1304,6 +1552,7 @@ def calibrate_custom(
     load_label: Optional[str] = None,
     gradient_kwargs: Optional[dict] = None,
     optimizer_options: Optional[Mapping[str, Any]] = None,
+    grid_search: Optional[GridSearch] = None,
 ) -> CalibrationResult:
     """
     Calibrate model parameters using a caller-supplied solution builder.
@@ -1383,6 +1632,23 @@ def calibrate_custom(
         Legacy numerical-gradient options for method="newton" only. Prefer
         optimizer_options["gradient_kwargs"]. When both are supplied, their
         entries are merged and optimizer_options takes precedence.
+    grid_search : int, mapping, sequence of rows, ndarray, or None
+        Optional initial search. An integer >= 2 generates that many evenly
+        spaced values per parameter over finite effective bounds. A mapping
+        uses result parameter names and supplies counts or explicit 1D axes;
+        omitted parameters retain their initial guesses during the search.
+        These forms take a Cartesian product. Alternatively, a nonempty 2D
+        array or list of tuples supplies exact candidates, with columns in
+        caller-supplied calib_params order (all parameters required).
+        Values must be finite and within effective bounds. The original or
+        saved initial guess is also considered; ties prefer it, then the first
+        best candidate. Failed/nonfinite evaluations are skipped; all failing
+        raises RuntimeError. Search is sequential and Cartesian cost grows
+        multiplicatively. Scalar problems require method='trf', 'Nelder-Mead',
+        or 'secant' (one target only). Scores use the optimizer's standard
+        squared residual weighting, without backend-specific robust losses.
+        Diagnostics are returned in result.grid_search; their arrays follow
+        result.parameters_array order (model, regime, then shock parameters).
     optimizer_options : Mapping[str, Any], optional
         Flat, backend-specific tuning options. Passed through SciPy's options
         dictionaries for minimize, minimize_scalar, and root; root_scalar uses
@@ -1471,6 +1737,13 @@ def calibrate_custom(
         load_label=load_label,
         gradient_kwargs=gradient_kwargs,
         optimizer_options=optimizer_options,
+        grid_search=grid_search,
+        grid_column_order=[
+            i
+            for param_type in (ModelParam, RegimeParam, ShockParam)
+            for i, param in enumerate(calib_params)
+            if isinstance(param, param_type)
+        ],
     )
 
 

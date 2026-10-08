@@ -329,6 +329,56 @@ The existing `gradient_kwargs` argument remains supported for Newton. Prefer
 merged with the new form taking precedence. Extra `**solver_kwargs` continue to
 configure the model solution solver, independently of optimizer tuning.
 
+#### Initial Grid Search
+
+Both calibration APIs accept `grid_search` to choose a starting guess before
+optimization. For example, with `calib_params=[ModelParam("alpha", ...),
+ModelParam("beta", ...)]`:
+
+```python
+# Cartesian product: five endpoint-inclusive points per parameter.
+result = calibrate(..., method="trf", grid_search=5)
+
+# Cartesian product of counts and/or explicit axes.
+result = calibrate_custom(
+    ..., method="trf", grid_search={"alpha": 5, "beta": [0.94, 0.97, 0.99]}
+)
+
+# Exact candidates, without a Cartesian product; a 2D NumPy array also works.
+result = calibrate(
+    ..., method="trf", grid_search=[(0.30, 0.94), (0.35, 0.97), (0.40, 0.99)]
+)
+```
+
+Candidate columns follow **the supplied `calib_params` order**, even when model,
+regime, and shock parameters are mixed. Every row specifies every parameter;
+for one parameter use `[(0.3,), (0.5,)]`. Mapping keys use result parameter names,
+including qualified names such as `regime_tau_r1` and `shock_Z_til_r0_t0`.
+Omitted mapping parameters retain their initial guesses during the search and
+remain free during optimization. Counts must be at least two and require finite
+bounds; explicit values must be finite and within the effective bounds.
+
+The original guess (or saved guess with `initialize_from_saved=True`) is always
+an additional candidate. Duplicate candidates are evaluated once, and ties
+prefer the original guess, then the first best candidate. Failed or nonfinite
+evaluations are skipped; an entirely invalid search raises an error. Scores use
+unweighted squared residuals for root finding and exactly identified TRF, and
+weighted squared residuals for minimization and over-identified TRF. Custom
+robust losses do not change this initial score. Target transforms apply normally.
+
+Scalar searches require an explicit `method="trf"`, `"Nelder-Mead"`, or
+`"secant"` (one target only), since the default scalar solvers do not accept a
+starting guess. Optimization always follows the search. `grid_search=None`
+keeps existing behavior. Searches run sequentially; Cartesian candidate counts
+multiply across axes, so explicit candidate rows can reduce work substantially.
+
+`result.grid_search` contains `initial_params`, `best_params`, `best_score`,
+`evaluations`, and `failures`. Diagnostic arrays follow `result.parameters_array`
+order (model, regime, then shock parameters), while input rows follow caller
+order. Grid counts include the baseline and failures; `result.iterations`
+continues to describe only the optimizer. `progress_every` controls grid
+progress logging as well as optimizer logging.
+
 #### Saving and Loading Calibrated Parameters
 
 Persist calibrated parameters for reuse across sessions:

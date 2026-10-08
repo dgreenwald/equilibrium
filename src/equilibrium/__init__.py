@@ -33,6 +33,7 @@ from .run_item import RunItem  # noqa: E402
 from .solvers.calibration import (  # noqa: E402
     CalibrationResult,
     FunctionalTarget,
+    GridSearchResult,
     ModelParam,
     PointTarget,
     RegimeParam,
@@ -117,6 +118,7 @@ __all__: list[str] = [
     "calibrate",
     "calibrate_custom",
     "CalibrationResult",
+    "GridSearchResult",
     "PointTarget",
     "FunctionalTarget",
     "ModelParam",

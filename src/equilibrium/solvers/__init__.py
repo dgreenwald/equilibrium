@@ -9,6 +9,7 @@ calibration interface.
 from .calibration import (
     CalibrationResult,
     FunctionalTarget,
+    GridSearchResult,
     ModelParam,
     PointTarget,
     RegimeParam,
@@ -39,6 +40,7 @@ __all__ = [
     "LinearSpec",
     "calibrate",
     "CalibrationResult",
+    "GridSearchResult",
     "PointTarget",
     "FunctionalTarget",
     "ModelParam",
