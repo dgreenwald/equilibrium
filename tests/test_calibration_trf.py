@@ -198,3 +198,22 @@ def test_optimizer_tolerance_does_not_relax_acceptance(run_calibration):
     )
     assert not result.success
     assert "exceeds tolerance" in result.message
+
+
+@pytest.mark.parametrize("n", [1, 3])
+@pytest.mark.parametrize("method", ["Nelder-Mead", "nelder-mead"])
+def test_nelder_mead_exact_targets(run_calibration, n, method):
+    expected = np.arange(1, n + 1, dtype=float)
+    result = run_calibration(
+        FunctionalTarget(lambda x: x - expected),
+        n=n,
+        method=method,
+        maxiter=1000,
+        tol=1e-8,
+        param_bounds=(0.0, 5.0),
+    )
+    assert result.success, result.message
+    assert result.method == "minimize"
+    assert result.parameters_array.shape == (n,)
+    assert np.issubdtype(result.parameters_array.dtype, np.floating)
+    np.testing.assert_allclose(result.parameters_array, expected, atol=1e-7)

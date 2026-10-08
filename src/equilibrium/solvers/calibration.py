@@ -881,6 +881,17 @@ def _run_calibration_loop(
         result = _solve_least_squares(
             residual_vector, initial_params, bounds, tol, maxiter, optimizer_options
         )
+    elif method is not None and method.lower() == "nelder-mead":
+        # Nelder-Mead minimizes squared errors even for square systems.
+        result = _solve_vector_minimize(
+            objective_with_weights,
+            initial_params,
+            bounds,
+            method,
+            tol,
+            maxiter,
+            optimizer_options,
+        )
     elif is_just_identified:
         if is_scalar:
             result = _solve_scalar_root(
